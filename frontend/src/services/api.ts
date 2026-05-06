@@ -142,7 +142,7 @@ class ApiService {
     });
   }
 
-  async updateApp(appId: number, data: { name: string; langsmith_api_key?: string; agent_rate_limit?: number; max_file_size_mb?: number; agent_cors_origins?: string; enable_openai_api?: boolean }) {
+  async updateApp(appId: number, data: { name: string; langsmith_api_key?: string; agent_rate_limit?: number; max_file_size_mb?: number; agent_cors_origins?: string; enable_openai_api?: boolean; sandbox_provider?: string | null }) {
     return this.request(`/internal/apps/${appId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -160,6 +160,10 @@ class ApiService {
       method: 'POST',
       body: JSON.stringify({ api_key: apiKey ?? null }),
     });
+  }
+
+  async getSandboxConfig() {
+    return this.request('/internal/apps/sandbox-config');
   }
 
   async dismissOnboarding(appId: number) {
