@@ -55,6 +55,11 @@ class Conversation(Base):
     # after a restart.  NULL when no sandbox has been created yet or when the
     # sandbox has been destroyed.
     sandbox_session_id = Column(String(255), nullable=True)
+    # Serialized JSON snapshot of the sandbox state (provider, session_key,
+    # sandbox_id, active_skills, updated_at).  Shape:
+    #   {"provider": "opensandbox", "session_key": "conv_12_456",
+    #    "sandbox_id": "sbx_abc", "active_skills": {...}, "updated_at": "...Z"}
+    sandbox_state = Column(Text, nullable=True)
 
     # Relationships
     agent = relationship("Agent", backref="conversations")
