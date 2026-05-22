@@ -43,7 +43,6 @@ async def test_create_agent_reuses_prepared_sandbox_handle(tmp_path):
 
     with (
         patch("tools.agentTools.get_llm", return_value=MagicMock()),
-        patch("tools.agentTools.get_langsmith_config", return_value=None),
         patch("tools.agentTools.get_output_parser", return_value=None),
         patch("tools.agentTools.create_langchain_agent", return_value=MagicMock()),
         patch("tools.agentTools.MCPClientManager.get_client", new=AsyncMock(return_value=None)),
