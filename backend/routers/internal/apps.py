@@ -18,6 +18,7 @@ from services.rate_limit_service import rate_limit_service
 from schemas.apps_schemas import (
     AppListItemSchema, AppDetailSchema, CreateAppSchema, UpdateAppSchema, AppUsageStatsSchema,
     LangSmithTestRequestSchema, LangSmithTestResponseSchema,
+    ClaudePluginImportResponseSchema,
 )
 from schemas.common_schemas import MessageResponseSchema
 from schemas.export_schemas import AppExportFileSchema
@@ -258,6 +259,67 @@ async def import_full_app(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Import failed: {str(e)}",
+        )
+
+
+@apps_router.post(
+    "/{app_id}/import-claude-plugin",
+    response_model=ClaudePluginImportResponseSchema,
+    summary="Import Claude Code plugin",
+    tags=["Apps", "Export/Import"],
+)
+async def import_claude_plugin(
+    app_id: int,
+    file: Annotated[UploadFile, File(description="Claude Code plugin ZIP package")],
+    auth_context: Annotated[AuthContext, Depends(get_current_user_oauth)],
+    db: Annotated[Session, Depends(get_db)],
+    role: Annotated[AppRole, Depends(require_min_role("administrator"))],
+) -> ClaudePluginImportResponseSchema:
+    """Import Claude Code plugin skills and agents into an existing app."""
+    from services.claude_plugin_import_service import ClaudePluginImportService
+
+    try:
+        contents = await file.read()
+        result = ClaudePluginImportService(db).import_plugin(app_id, contents)
+        return ClaudePluginImportResponseSchema(
+            success=True,
+            message=(
+                f"Imported {len(result.imported_skills)} skills and "
+                f"{len(result.imported_agents)} agents"
+            ),
+            plugin_name=result.plugin_name,
+            imported_skills=[
+                {
+                    "skill_id": skill.skill_id,
+                    "name": skill.name,
+                    "created": skill.created,
+                }
+                for skill in result.imported_skills
+            ],
+            imported_agents=[
+                {
+                    "agent_id": agent.agent_id,
+                    "name": agent.name,
+                    "created": agent.created,
+                    "skill_ids": agent.skill_ids,
+                    "missing_skills": agent.missing_skills,
+                }
+                for agent in result.imported_agents
+            ],
+            warnings=result.warnings,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Claude plugin import failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Claude plugin import failed: {str(e)}",
         )
 
 
