@@ -82,6 +82,8 @@ function ChatInterface({
   const lastScrollTopRef = useRef(0);
   const filterPanelId = `metadata-filters-${agentId}`;
 
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
   const playgroundStream = useCallback(
     (message: string, opts: Parameters<typeof apiService.chatWithAgentStream>[3]) =>
       apiService.chatWithAgentStream(appId, agentId, message, opts),
@@ -303,6 +305,16 @@ function ChatInterface({
     }
   };
 
+  useEffect(() => {
+    if (!textareaRef.current) return;
+
+    textareaRef.current.style.height = 'auto';
+    textareaRef.current.style.height = `${Math.min(
+      textareaRef.current.scrollHeight,
+      160
+    )}px`;
+  }, [inputMessage]);
+
   // ─── Reset ───────────────────────────────────────────────────────────────────
 
   const handleResetConversation = async () => {
@@ -514,9 +526,9 @@ function ChatInterface({
       )}
 
       {/* Chat Interface + File Panel */}
-      <div className="flex gap-4 items-start">
+      <div className="flex gap-4 items-start h-full">
         {/* Chat card */}
-        <div className="flex-1 pg-glass rounded-2xl flex flex-col h-[calc(100vh-20rem)] min-h-[480px]">
+        <div className="flex-1 pg-glass rounded-l-none rounded-r-xl border-l-0 flex flex-col h-[calc(100vh-20rem)] min-h-[480px]">
           {/* Reset button — subtle, top-right corner */}
           <div className="flex justify-end px-4 pt-3 pb-1">
             <button
@@ -766,7 +778,7 @@ function ChatInterface({
 
           {/* Input area */}
           <div className="px-4 pb-4 pt-3 border-t border-white/20 dark:border-gray-700/30">
-            <div className="pg-glass rounded-xl px-3 py-2.5 flex items-end gap-2">
+            <div className="pg-glass pg-input-container rounded-xl px-3 py-2.5 flex items-end gap-2">
               {/* File attach button */}
               <div>
                 <input
@@ -809,6 +821,7 @@ function ChatInterface({
 
               {/* Textarea */}
               <textarea
+                ref={textareaRef}
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyDown={handleKeyDown}
@@ -816,18 +829,13 @@ function ChatInterface({
                 placeholder={`Message ${agentName}...`}
                 disabled={isStreaming}
                 className="flex-1 bg-transparent border-none outline-none resize-none
-                           text-sm text-gray-800 dark:text-gray-100
-                           placeholder:text-gray-400 dark:placeholder:text-gray-500
-                           disabled:opacity-50
-                           max-h-40 input-login"
+                          text-sm text-gray-800 dark:text-gray-100
+                          placeholder:text-gray-400 dark:placeholder:text-gray-500
+                          disabled:opacity-50
+                          focus:outline-none focus:ring-0
+                          max-h-40"
                 rows={1}
                 style={{ minHeight: '1.5rem' }}
-                onInput={(e) => {
-                  // Auto-resize textarea
-                  const target = e.target as HTMLTextAreaElement;
-                  target.style.height = 'auto';
-                  target.style.height = `${Math.min(target.scrollHeight, 160)}px`;
-                }}
               />
 
               {/* Send / Abort button */}

@@ -192,7 +192,11 @@ const MessageContent: React.FC<MessageContentProps> = ({ content, resolveFileUrl
   const renderedContent = useMemo(() => {
     if (typeof content === 'object' && content !== null) {
       return (
+<<<<<<< HEAD
         <pre className="bg-gray-100 p-4 rounded-lg whitespace-pre-wrap break-all">
+=======
+        <pre className="bg-gray-100 p-4 rounded-lg whitespace-pre-wrap break-words">
+>>>>>>> 5b60e01f (feat(playground): improve conversation sidebar integration and chat layout)
           <code className="text-sm">{JSON.stringify(content, null, 2)}</code>
         </pre>
       );
