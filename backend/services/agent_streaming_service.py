@@ -24,6 +24,7 @@ from tools.streaming_utils import (
     SSE_TOKEN,
 )
 from services.agent_execution_service import AgentExecutionService
+from services.execution_profile_service import ExecutionProfileService
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -48,6 +49,7 @@ class AgentStreamingService:
         search_params: dict | None = None,
         user_context: dict | None = None,
         conversation_id: int | None = None,
+        execution_profile: str | None = None,
         db: Session | None = None,
     ) -> AsyncGenerator[str, None]:
         """Stream an agent chat turn as SSE events.
@@ -86,6 +88,11 @@ class AgentStreamingService:
         Yields:
             SSE-formatted strings (``"data: {...}\\n\\n"``).
         """
+        # temporal
+        profile_service = ExecutionProfileService()
+        profile = profile_service.resolve_profile(execution_profile)
+        logger.info(f"Resolved execution profile: {profile.model_dump()}")
+
         effective_db = db or self.db
         mcp_client = None
 

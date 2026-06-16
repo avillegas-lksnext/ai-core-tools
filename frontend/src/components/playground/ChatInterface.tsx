@@ -56,6 +56,9 @@ function ChatInterface({
 }: Readonly<ChatInterfaceProps>) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState('');
+
+  const [executionProfile, setExecutionProfile] = useState<'fast' | 'balanced' | 'deep' | 'max'>('balanced');
+
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [persistentFiles, setPersistentFiles] = useState<RawAttachedFile[]>([]);
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
@@ -264,6 +267,7 @@ function ChatInterface({
       const result = await sendMessage(messageText, {
         conversationId: currentConversationId,
         searchParams,
+        executionProfile,
       });
 
       const rawResponse = result.response || '';
@@ -829,6 +833,21 @@ function ChatInterface({
                   target.style.height = `${Math.min(target.scrollHeight, 160)}px`;
                 }}
               />
+
+              <div className="flex items-center gap-2 mb-2 px-1">
+                <select
+                  value={executionProfile}
+                  onChange={(e) =>
+                    setExecutionProfile(e.target.value as 'fast' | 'balanced' | 'deep' | 'max')
+                  }
+                  className="text-xs rounded-lg border px-2 py-1"
+                >
+                  <option value="fast">Fast</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="deep">Deep</option>
+                  <option value="max">Max</option>
+                </select>
+              </div>
 
               {/* Send / Abort button */}
               {isStreaming ? (

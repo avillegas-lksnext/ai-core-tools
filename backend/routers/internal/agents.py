@@ -732,6 +732,7 @@ async def chat_with_agent_stream(
     file_references: Annotated[Optional[str], Form()] = None,
     search_params: Annotated[Optional[str], Form()] = None,
     conversation_id: Annotated[Optional[int], Form()] = None,
+    execution_profile: Annotated[Optional[str], Form()] = None,
 ):
     """
     Internal API: Chat with agent using Server-Sent Events streaming (OAuth authentication)
@@ -776,6 +777,7 @@ async def chat_with_agent_stream(
             search_params=parsed_search_params,
             user_context=user_context,
             conversation_id=conversation_id,
+            execution_profile=execution_profile,
             db=db,
         )
 

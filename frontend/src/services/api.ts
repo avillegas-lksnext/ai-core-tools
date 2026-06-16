@@ -1345,6 +1345,7 @@ class ApiService {
       files?: File[];
       searchParams?: unknown;
       conversationId?: number | null;
+      executionProfile?: 'fast' | 'balanced' | 'deep' | 'max';
       onEvent: (event: StreamEvent) => void;
       signal?: AbortSignal;
     }
@@ -1357,6 +1358,9 @@ class ApiService {
     }
     if (options.conversationId) {
       formData.append('conversation_id', options.conversationId.toString());
+    }
+    if (options.executionProfile) {
+      formData.append('execution_profile', options.executionProfile);
     }
     if (options.files && options.files.length > 0) {
       options.files.forEach((file) => formData.append('files', file));
