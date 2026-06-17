@@ -88,10 +88,6 @@ class AgentStreamingService:
         Yields:
             SSE-formatted strings (``"data: {...}\\n\\n"``).
         """
-        # temporal
-        profile_service = ExecutionProfileService()
-        profile = profile_service.resolve_profile(execution_profile)
-        logger.info(f"Resolved execution profile: {profile.model_dump()}")
 
         effective_db = db or self.db
         mcp_client = None
@@ -107,6 +103,7 @@ class AgentStreamingService:
                 search_params=search_params,
                 user_context=user_context,
                 conversation_id=conversation_id,
+                execution_profile=execution_profile,
                 db=effective_db,
             )
 
@@ -132,6 +129,7 @@ class AgentStreamingService:
                 ctx.session_id_for_cache,
                 ctx.user_context,
                 ctx.working_dir,
+                ctx.execution_profile,
             )
 
             config = prepare_agent_config(ctx.fresh_agent)

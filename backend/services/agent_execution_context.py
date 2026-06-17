@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from schemas.execution_profile_schemas import ExecutionProfile
+
 
 @dataclass
 class AgentExecutionContext:
@@ -38,3 +40,5 @@ class AgentExecutionContext:
     processed_files: List[Dict[str, Any]] = field(default_factory=list)
     search_params: Optional[Dict[str, Any]] = None
     user_context: Optional[Dict[str, Any]] = None
+
+    execution_profile: Optional[ExecutionProfile] = None  # Execution profile for this turn

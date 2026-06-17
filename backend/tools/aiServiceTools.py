@@ -75,7 +75,7 @@ def create_llm_from_service(ai_service, temperature=0, is_vision=False):
 
     return builder()
 
-def get_llm(agent, is_vision=False):
+def get_llm(agent, is_vision=False, execution_profile=None):
     """
     Función base para obtener cualquier modelo LLM
     Args:

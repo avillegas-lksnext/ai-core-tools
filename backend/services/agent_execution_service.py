@@ -24,6 +24,7 @@ from tools.outputParserTools import create_model_from_json_schema
 from services.agent_service import AgentService
 from services.file_management_service import FileManagementService
 from services.session_management_service import SessionManagementService
+from services.execution_profile_service import ExecutionProfileService
 from repositories.agent_execution_repository import AgentExecutionRepository
 from utils.logger import get_logger
 from utils.config import get_app_config
@@ -131,6 +132,7 @@ class AgentExecutionService:
         search_params: Dict = None,
         user_context: Dict = None,
         conversation_id: int = None,
+        execution_profile: str | None = None,
         db: Session = None,
     ) -> AgentExecutionContext:
         """Run all setup steps for one agent chat turn.
@@ -245,6 +247,9 @@ class AgentExecutionService:
         pre_existing_files: set = set()
         if working_dir and os.path.isdir(working_dir):
             pre_existing_files = set(os.listdir(working_dir))
+        
+        profile_service = ExecutionProfileService()
+        resolved_profile = profile_service.resolve_profile(execution_profile)
 
         return AgentExecutionContext(
             agent_id=agent_id,
@@ -261,6 +266,7 @@ class AgentExecutionService:
             processed_files=processed_files,
             search_params=search_params,
             user_context=user_context,
+            execution_profile=resolved_profile,
         )
 
     async def _finalize_turn(
