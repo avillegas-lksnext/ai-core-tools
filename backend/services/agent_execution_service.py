@@ -25,6 +25,7 @@ from services.agent_service import AgentService
 from services.file_management_service import FileManagementService
 from services.session_management_service import SessionManagementService
 from services.execution_profile_service import ExecutionProfileService
+from services.execution_resolver_service import ExecutionResolverService
 from repositories.agent_execution_repository import AgentExecutionRepository
 from utils.logger import get_logger
 from utils.config import get_app_config
@@ -250,6 +251,8 @@ class AgentExecutionService:
         
         profile_service = ExecutionProfileService()
         resolved_profile = profile_service.resolve_profile(execution_profile)
+        resolver = ExecutionResolverService()
+        execution_config = resolver.resolve(resolved_profile)
 
         return AgentExecutionContext(
             agent_id=agent_id,
@@ -267,6 +270,7 @@ class AgentExecutionService:
             search_params=search_params,
             user_context=user_context,
             execution_profile=resolved_profile,
+            execution_config=execution_config,
         )
 
     async def _finalize_turn(

@@ -121,7 +121,7 @@ async def create_agent(agent: Agent, search_params=None, session_id=None, user_c
         user_context: Optional user context containing authentication tokens for MCP
         execution_profile: Optional execution profile for this agent
     """
-    llm = get_llm(agent, execution_profile)
+    llm = get_llm(agent, execution_profile=execution_profile)
     if llm is None:
         raise ValueError("No LLM found for agent")
 

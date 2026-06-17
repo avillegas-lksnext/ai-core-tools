@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from schemas.execution_profile_schemas import ExecutionProfile
+from schemas.execution_config_schemas import ExecutionConfig
 
 
 @dataclass
@@ -42,3 +43,4 @@ class AgentExecutionContext:
     user_context: Optional[Dict[str, Any]] = None
 
     execution_profile: Optional[ExecutionProfile] = None  # Execution profile for this turn
+    execution_config: Optional[ExecutionConfig] = None  # Resolved execution config for this turn
