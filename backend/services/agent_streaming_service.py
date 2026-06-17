@@ -130,6 +130,7 @@ class AgentStreamingService:
                 ctx.user_context,
                 ctx.working_dir,
                 ctx.execution_profile,
+                ctx.provider_execution_config
             )
 
             config = prepare_agent_config(ctx.fresh_agent)

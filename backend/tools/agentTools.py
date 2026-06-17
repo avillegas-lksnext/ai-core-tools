@@ -28,6 +28,7 @@ from utils.mcp_ssl_utils import inject_ssl_config
 from tools.skill_tools import create_skill_loader_tool, generate_skills_system_prompt_section
 from tools.python_sandbox_tools import create_python_repl_tool
 from schemas.execution_profile_schemas import ExecutionProfile
+from schemas.provider_execution_config_schemas import ProviderExecutionConfig
 
 logger = get_logger(__name__)
 
@@ -111,7 +112,7 @@ class MCPClientManager:
         if self._client is not None:
             self._client = None
 
-async def create_agent(agent: Agent, search_params=None, session_id=None, user_context: Optional[Dict] = None, working_dir: Optional[str] = None, execution_profile: Optional[ExecutionProfile] = None):
+async def create_agent(agent: Agent, search_params=None, session_id=None, user_context: Optional[Dict] = None, working_dir: Optional[str] = None, execution_profile: Optional[ExecutionProfile] = None, provider_execution_config: Optional[ProviderExecutionConfig] = None):
     """Create a new agent instance with cached checkpointer if memory is enabled.
     
     Args:
@@ -120,8 +121,9 @@ async def create_agent(agent: Agent, search_params=None, session_id=None, user_c
         session_id: Optional session ID for memory-enabled agents (used to cache checkpointer)
         user_context: Optional user context containing authentication tokens for MCP
         execution_profile: Optional execution profile for this agent
+        provider_execution_config: Optional provider execution config for this agent
     """
-    llm = get_llm(agent, execution_profile=execution_profile)
+    llm = get_llm(agent, execution_profile=execution_profile, provider_execution_config=provider_execution_config)
     if llm is None:
         raise ValueError("No LLM found for agent")
 
