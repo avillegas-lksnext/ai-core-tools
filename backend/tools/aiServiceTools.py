@@ -45,7 +45,7 @@ def get_output_parser(agent):
 # Legacy functions removed - now using create_agent from agentTools.py
 # This provides full tool support, MCP integration, and LangSmith tracing
 
-def create_llm_from_service(ai_service, temperature=0, is_vision=False):
+def create_llm_from_service(ai_service, temperature=0, is_vision=False, runtime_llm_config=None):
     """
     Create an LLM instance from an AIService model
     Args:
@@ -54,13 +54,13 @@ def create_llm_from_service(ai_service, temperature=0, is_vision=False):
         is_vision: boolean
     """
     provider_builders = {
-        ProviderEnum.OpenAI.value: lambda: _build_openai_llm(ai_service, temperature),
-        ProviderEnum.Anthropic.value: lambda: _build_anthropic_llm(ai_service, temperature),
-        ProviderEnum.MistralAI.value: lambda: _build_mistral_llm(ai_service, temperature, is_vision),
-        ProviderEnum.Custom.value: lambda: _build_custom_llm(ai_service, temperature),
-        ProviderEnum.Azure.value: lambda: _build_azure_llm(ai_service, temperature),
-        ProviderEnum.Google.value: lambda: _build_google_llm(ai_service, temperature),
-        ProviderEnum.GoogleCloud.value: lambda: _build_google_cloud_llm(ai_service, temperature),
+        ProviderEnum.OpenAI.value: lambda: _build_openai_llm(ai_service, temperature, runtime_llm_config),
+        ProviderEnum.Anthropic.value: lambda: _build_anthropic_llm(ai_service, temperature, runtime_llm_config),
+        ProviderEnum.MistralAI.value: lambda: _build_mistral_llm(ai_service, temperature, is_vision, runtime_llm_config),
+        ProviderEnum.Custom.value: lambda: _build_custom_llm(ai_service, temperature, runtime_llm_config),
+        ProviderEnum.Azure.value: lambda: _build_azure_llm(ai_service, temperature, runtime_llm_config),
+        ProviderEnum.Google.value: lambda: _build_google_llm(ai_service, temperature, runtime_llm_config),
+        ProviderEnum.GoogleCloud.value: lambda: _build_google_cloud_llm(ai_service, temperature, runtime_llm_config),
         ProviderEnum.OpenRouter.value: lambda: _build_openrouter_llm(ai_service, temperature),
     }
 
@@ -75,13 +75,20 @@ def create_llm_from_service(ai_service, temperature=0, is_vision=False):
 
     return builder()
 
-def get_llm(agent, is_vision=False, execution_profile=None, provider_execution_config=None):
+def get_llm(agent, is_vision=False, runtime_llm_config=None):
     """
     Función base para obtener cualquier modelo LLM
     Args:
         agent: Agent object with model configuration
         is_vision: Boolean que indica si es un modelo de visión
     """
+
+    logger.info(
+        "get_llm agent=%s runtime_config=%s",
+        agent.agent_id,
+        runtime_llm_config,
+    )
+
     if is_vision:
         ai_service = agent.vision_service_rel
     else:
@@ -94,7 +101,7 @@ def get_llm(agent, is_vision=False, execution_profile=None, provider_execution_c
     from models.agent import DEFAULT_AGENT_TEMPERATURE
     temperature = getattr(agent, 'temperature', DEFAULT_AGENT_TEMPERATURE)
 
-    return create_llm_from_service(ai_service, temperature, is_vision)
+    return create_llm_from_service(ai_service, temperature, is_vision, runtime_llm_config)
 
 class MistralWrapper:
     def __init__(self, client, model_name):
@@ -110,13 +117,15 @@ class VoidRetriever(BaseRetriever):
         return []
 
 
-def _build_openai_llm(ai_service, temperature):
+def _build_openai_llm(ai_service, temperature, runtime_llm_config=None):
     base_url = ai_service.endpoint if ai_service.endpoint else None
+    runtime_kwargs = _build_runtime_kwargs(runtime_llm_config)
     return ChatOpenAI(
         model=ai_service.description,
         temperature=temperature,
         api_key=ai_service.api_key,
         base_url=base_url,
+        **runtime_kwargs,
     )
 
 
@@ -150,26 +159,30 @@ def _build_openrouter_llm(ai_service, temperature):
     )
 
 
-def _build_anthropic_llm(ai_service, temperature):
+def _build_anthropic_llm(ai_service, temperature, runtime_llm_config=None):
+    runtime_kwargs = _build_runtime_kwargs(runtime_llm_config)
     return ChatAnthropic(
         model=ai_service.description,
         temperature=temperature,
         api_key=ai_service.api_key,
+        **runtime_kwargs,
     )
 
 
-def _build_mistral_llm(ai_service, temperature, is_vision):
+def _build_mistral_llm(ai_service, temperature, is_vision, runtime_llm_config=None):
     if is_vision:
         mistral_client = Mistral(api_key=ai_service.api_key)
         return MistralWrapper(client=mistral_client, model_name=ai_service.description)
+    runtime_kwargs = _build_runtime_kwargs(runtime_llm_config)
     return ChatMistralAI(
         model=ai_service.description,
         temperature=temperature,
         api_key=ai_service.api_key,
+        **runtime_kwargs,
     )
 
 
-def build_ollama_auth_headers(api_key: str | None, endpoint: str | None) -> dict[str, str]:
+def build_ollama_auth_headers(api_key: str | None, endpoint: str | None, runtime_llm_config=None) -> dict[str, str]:
     """Build auth headers for an Ollama-protocol endpoint.
 
     Self-hosted Ollama instances are commonly placed behind a reverse
@@ -197,9 +210,9 @@ def build_ollama_auth_headers(api_key: str | None, endpoint: str | None) -> dict
     return headers
 
 
-def _build_custom_llm(ai_service, temperature):
+def _build_custom_llm(ai_service, temperature, runtime_llm_config=None):
     client_kwargs = {"verify": False}
-    headers = build_ollama_auth_headers(ai_service.api_key, ai_service.endpoint)
+    headers = build_ollama_auth_headers(ai_service.api_key, ai_service.endpoint, runtime_llm_config)
     if headers:
         client_kwargs["headers"] = headers
 
@@ -213,20 +226,22 @@ def _build_custom_llm(ai_service, temperature):
     return service
 
 
-def _build_azure_llm(ai_service, temperature):
+def _build_azure_llm(ai_service, temperature, runtime_llm_config=None):
+    runtime_kwargs = _build_runtime_kwargs(runtime_llm_config)
     return AzureAIChatCompletionsModel(
         model=ai_service.description,
         temperature=temperature,
         credential=ai_service.api_key,
         endpoint=ai_service.endpoint,
         api_version=ai_service.api_version,
+        **runtime_kwargs,
     )
 
 
 _DEFAULT_GOOGLE_HOST = "generativelanguage.googleapis.com"
 
 
-def _resolve_google_client_options(endpoint_raw, service_name):
+def _resolve_google_client_options(endpoint_raw, service_name, runtime_llm_config=None):
     """Return client_options dict for a custom Google endpoint, or None to use the library default.
 
     The new google-genai REST client (v1.x) requires api_endpoint to include https://,
@@ -257,8 +272,7 @@ def _resolve_google_client_options(endpoint_raw, service_name):
         )
     return {"api_endpoint": f"https://{host}"}
 
-
-def _build_google_llm(ai_service, temperature):
+def _build_google_llm(ai_service, temperature, runtime_llm_config=None):
     google_kwargs = {
         "model": ai_service.description,
         "temperature": temperature,
@@ -272,10 +286,18 @@ def _build_google_llm(ai_service, temperature):
         )
         if client_options:
             google_kwargs["client_options"] = client_options
+    
+    google_kwargs.update(_build_runtime_kwargs(runtime_llm_config))
+
+    logger.info(
+        "Creating Gemini model=%s kwargs=%s",
+        ai_service.description,
+        google_kwargs,
+    )
 
     return ChatGoogleGenerativeAI(**google_kwargs)
 
-def _build_google_cloud_llm(ai_service, temperature):
+def _build_google_cloud_llm(ai_service, temperature, runtime_llm_config=None):
     import json, os
     from google.oauth2 import service_account
 
@@ -296,11 +318,110 @@ def _build_google_cloud_llm(ai_service, temperature):
         scopes=["https://www.googleapis.com/auth/cloud-platform"],
     )
 
-    return ChatGoogleGenerativeAI(
-        model=ai_service.description,
-        temperature=temperature,
-        credentials=credentials,
-        project=project_id,
-        location=location,
-        vertexai=True,
+    google_kwargs = {
+        "model": ai_service.description,
+        "temperature": temperature,
+        "credentials": credentials,
+        "project": project_id,
+        "location": location,
+        "vertexai": True,
+    }
+
+    google_kwargs.update(_build_runtime_kwargs(runtime_llm_config))
+
+    return ChatGoogleGenerativeAI(**google_kwargs)
+
+
+def _build_openai_runtime_kwargs(runtime_llm_config):
+    if not runtime_llm_config or not runtime_llm_config.supports_reasoning_effort:
+        return {}
+
+    effort_map = {
+        0: "minimal",
+        1: "low",
+        2: "medium",
+        3: "high",
+    }
+
+    result = { "reasoning_effort": effort_map[runtime_llm_config.reasoning_level] }
+
+    logger.info(
+        "OpenAI runtime kwargs: %s",
+        result
     )
+
+    return result
+
+def _build_anthropic_runtime_kwargs(runtime_llm_config):
+    if not runtime_llm_config or not runtime_llm_config.supports_thinking_budget:
+        return {}
+    
+    budget_map = {
+        0: 1024,
+        1: 4096,
+        2: 8192,
+        3: 16384,
+    }
+
+    return {
+        "thinking_budget": budget_map[runtime_llm_config.reasoning_level]
+    }
+
+def _build_google_runtime_kwargs(runtime_llm_config):
+    if not runtime_llm_config or not runtime_llm_config.supports_thinking_budget:
+        return {}
+
+    budget_map = {
+        0: 1024,
+        1: 4096,
+        2: 8192,
+        3: 16384,
+    }
+
+    result = {
+        "thinking_budget": budget_map[runtime_llm_config.reasoning_level]
+    }
+
+    logger.info(
+        "Google runtime kwargs: %s",
+        result
+    )
+
+    return result
+
+def _build_mistral_runtime_kwargs(runtime_llm_config):
+    #Temporal
+    return {}
+
+def _build_custom_runtime_kwargs(runtime_llm_config):
+    #Temporal
+    return {}
+
+def _build_runtime_kwargs(runtime_llm_config):
+    if not runtime_llm_config:
+        return {}
+
+    provider = (runtime_llm_config.provider or "").lower()
+
+    if provider == "openai":
+        return _build_openai_runtime_kwargs(runtime_llm_config)
+
+    if provider == "azure":
+        return _build_openai_runtime_kwargs(runtime_llm_config)
+
+    if provider == "google":
+        return _build_google_runtime_kwargs(runtime_llm_config)
+
+    if provider == "googlecloud":
+        return _build_google_runtime_kwargs(runtime_llm_config)
+
+    if provider == "anthropic":
+        return _build_anthropic_runtime_kwargs(runtime_llm_config)
+
+    if provider == "mistralai":
+        return _build_mistral_runtime_kwargs(runtime_llm_config)
+
+    if provider == "custom":
+        return _build_custom_runtime_kwargs(runtime_llm_config)
+
+    return {}

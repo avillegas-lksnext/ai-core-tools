@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.orm import Session
 
+from schemas.runtime_llm_config_schemas import RuntimeLLMConfig
 from models.agent import Agent
 from models.ocr_agent import OCRAgent
 from services.agent_execution_context import AgentExecutionContext
@@ -27,7 +28,7 @@ from services.session_management_service import SessionManagementService
 from services.execution_profile_service import ExecutionProfileService
 from services.execution_resolver_service import ExecutionResolverService
 from services.model_capability_service import ModelCapabilityService
-from services.provider_execution_resolver import ProviderExecutionResolver
+from services.llm_runtime_config_service import LLMRuntimeConfigService
 from repositories.agent_execution_repository import AgentExecutionRepository
 from utils.logger import get_logger
 from utils.config import get_app_config
@@ -85,6 +86,7 @@ class AgentExecutionService:
         search_params: Dict = None,
         user_context: Dict = None,
         conversation_id: int = None,
+        execution_profile: str | None = None,
         db: Session = None,
     ) -> Dict[str, Any]:
         """Execute agent chat with persistent file references.
@@ -100,6 +102,7 @@ class AgentExecutionService:
                 search_params=search_params,
                 user_context=user_context,
                 conversation_id=conversation_id,
+                execution_profile=execution_profile,
                 db=db,
             )
 
@@ -117,6 +120,7 @@ class AgentExecutionService:
                 ctx.user_context,
                 ctx.image_files,
                 working_dir=ctx.working_dir,
+                runtime_llm_config=ctx.runtime_llm_config,
             )
 
             return await self._finalize_turn(ctx, response, db)
@@ -259,9 +263,15 @@ class AgentExecutionService:
 
         capability_service = ModelCapabilityService()
         provider = fresh_agent.ai_service.provider
-        capabilities = capability_service.get_capabilities(provider)
-        provider_resolver = ProviderExecutionResolver()
-        provider_execution_config = provider_resolver.resolve(execution_config, capabilities)
+        model_name = fresh_agent.ai_service.description or ""
+        capabilities = capability_service.get_capabilities(provider, model_name)
+
+        runtime_service = LLMRuntimeConfigService()
+        runtime_llm_config = runtime_service.build(
+            provider=provider,
+            execution_config=execution_config,
+            capabilities=capabilities
+        )
 
         return AgentExecutionContext(
             agent_id=agent_id,
@@ -278,9 +288,7 @@ class AgentExecutionService:
             processed_files=processed_files,
             search_params=search_params,
             user_context=user_context,
-            execution_profile=resolved_profile,
-            execution_config=execution_config,
-            provider_execution_config=provider_execution_config,
+            runtime_llm_config=runtime_llm_config,
         )
 
     async def _finalize_turn(
@@ -995,7 +1003,8 @@ class AgentExecutionService:
         session_id_for_cache: str = None,
         user_context: Dict = None,
         image_files: List[Dict] = None,
-        working_dir: Optional[str] = None
+        working_dir: Optional[str] = None,
+        runtime_llm_config: Optional[RuntimeLLMConfig] = None,
     ) -> Any:
         """Execute agent in FastAPI's event loop using shared checkpointer pool.
 
@@ -1017,7 +1026,7 @@ class AgentExecutionService:
             )
 
             # Prepare configuration
-            config = prepare_agent_config(fresh_agent)
+            config = prepare_agent_config(fresh_agent, runtime_llm_config)
 
             # Add session-specific configuration if memory is enabled
             if fresh_agent.has_memory and session_id_for_cache:

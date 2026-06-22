@@ -1,7 +1,6 @@
     
 
 from enum import Enum
-
 from pydantic import BaseModel
 
 
@@ -17,8 +16,3 @@ class ExecutionProfile(BaseModel):
     reasoning_level: int
     tool_usage_level: int
     retrieval_level: int
-
-class ResolvedExecutionSettings(BaseModel):
-    reasoning_level: int
-    max_tool_calls: int
-    max_retrieval_calls: int

@@ -640,6 +640,7 @@ async def chat_with_agent(
     file_references: Annotated[Optional[str], Form()] = None,
     search_params: Annotated[Optional[str], Form()] = None,
     conversation_id: Annotated[Optional[int], Form()] = None,
+    execution_profile: Annotated[Optional[str], Form()] = None,
 ):
     """
     Internal API: Chat with agent for playground (OAuth authentication)
@@ -651,6 +652,7 @@ async def chat_with_agent(
         file_references: Optional JSON array of file_ids to include. If not provided, all files are included.
         search_params: Optional search parameters
         conversation_id: Optional conversation ID to continue existing conversation
+        execution_profile: Optional execution profile
     """
     fms = FileManagementService()
     all_file_references: list = []
@@ -695,6 +697,7 @@ async def chat_with_agent(
             search_params=parsed_search_params,
             user_context=user_context,
             conversation_id=conversation_id,
+            execution_profile=execution_profile,
             db=db,
         )
 

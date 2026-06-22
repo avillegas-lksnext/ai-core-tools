@@ -10,9 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from schemas.provider_execution_config_schemas import ProviderExecutionConfig
-from schemas.execution_profile_schemas import ExecutionProfile
-from schemas.execution_config_schemas import ExecutionConfig
+from schemas.runtime_llm_config_schemas import RuntimeLLMConfig
 
 
 @dataclass
@@ -43,6 +41,4 @@ class AgentExecutionContext:
     search_params: Optional[Dict[str, Any]] = None
     user_context: Optional[Dict[str, Any]] = None
 
-    execution_profile: Optional[ExecutionProfile] = None  # Execution profile for this turn
-    execution_config: Optional[ExecutionConfig] = None  # Resolved execution config for this turn
-    provider_execution_config: Optional[ProviderExecutionConfig] = None  # Resolved provider execution config for this turn
+    runtime_llm_config: Optional[RuntimeLLMConfig] = None  # Resolved runtime LLM config for this turn

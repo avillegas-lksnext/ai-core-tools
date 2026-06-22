@@ -24,7 +24,6 @@ from tools.streaming_utils import (
     SSE_TOKEN,
 )
 from services.agent_execution_service import AgentExecutionService
-from services.execution_profile_service import ExecutionProfileService
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -129,11 +128,10 @@ class AgentStreamingService:
                 ctx.session_id_for_cache,
                 ctx.user_context,
                 ctx.working_dir,
-                ctx.execution_profile,
-                ctx.provider_execution_config
+                ctx.runtime_llm_config,
             )
 
-            config = prepare_agent_config(ctx.fresh_agent)
+            config = prepare_agent_config(ctx.fresh_agent, ctx.runtime_llm_config)
 
             if ctx.fresh_agent.has_memory and ctx.session_id_for_cache:
                 config["configurable"]["thread_id"] = (

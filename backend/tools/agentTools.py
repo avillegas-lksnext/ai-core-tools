@@ -1,3 +1,6 @@
+import contextvars
+
+from functools import wraps
 from langchain.messages import HumanMessage, SystemMessage, AnyMessage
 from langchain.agents import create_agent as create_langchain_agent, AgentState
 from langchain.agents.middleware import SummarizationMiddleware
@@ -15,7 +18,7 @@ from db.database import SessionLocal
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from services.agent_cache_service import CheckpointerCacheService
 from langchain_core.documents import Document
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import StructuredTool, ToolException
 import json
 import asyncio
 import os
@@ -27,8 +30,7 @@ from utils.mcp_auth_utils import prepare_mcp_headers, get_user_token_from_contex
 from utils.mcp_ssl_utils import inject_ssl_config
 from tools.skill_tools import create_skill_loader_tool, generate_skills_system_prompt_section
 from tools.python_sandbox_tools import create_python_repl_tool
-from schemas.execution_profile_schemas import ExecutionProfile
-from schemas.provider_execution_config_schemas import ProviderExecutionConfig
+from schemas.runtime_llm_config_schemas import RuntimeLLMConfig
 
 logger = get_logger(__name__)
 
@@ -112,7 +114,7 @@ class MCPClientManager:
         if self._client is not None:
             self._client = None
 
-async def create_agent(agent: Agent, search_params=None, session_id=None, user_context: Optional[Dict] = None, working_dir: Optional[str] = None, execution_profile: Optional[ExecutionProfile] = None, provider_execution_config: Optional[ProviderExecutionConfig] = None):
+async def create_agent(agent: Agent, search_params=None, session_id=None, user_context: Optional[Dict] = None, working_dir: Optional[str] = None, runtime_llm_config: Optional[RuntimeLLMConfig] = None):
     """Create a new agent instance with cached checkpointer if memory is enabled.
     
     Args:
@@ -120,10 +122,9 @@ async def create_agent(agent: Agent, search_params=None, session_id=None, user_c
         search_params: Optional search parameters for silo-based retrieval
         session_id: Optional session ID for memory-enabled agents (used to cache checkpointer)
         user_context: Optional user context containing authentication tokens for MCP
-        execution_profile: Optional execution profile for this agent
-        provider_execution_config: Optional provider execution config for this agent
+        runtime_llm_config: Optional runtime LLM config for this agent
     """
-    llm = get_llm(agent, execution_profile=execution_profile, provider_execution_config=provider_execution_config)
+    llm = get_llm(agent, runtime_llm_config=runtime_llm_config)
     if llm is None:
         raise ValueError("No LLM found for agent")
 
@@ -240,12 +241,18 @@ async def create_agent(agent: Agent, search_params=None, session_id=None, user_c
         tools.append(create_download_url_tool(working_dir))
 
     if agent.silo_id is not None:
-        # Resolve precedence (caller > agent RAG config > system) AND build the tool
-        # off the event loop: both precedence resolution (lazy-loads
-        # silo.metadata_definition) and construction (distinct-value sampling) do
-        # synchronous DB work.
+        # Extract max_retrieval_calls from runtime config if available
+        max_retrieval_calls = None
+        if runtime_llm_config and runtime_llm_config.agent_limits:
+            max_retrieval_calls = runtime_llm_config.agent_limits.get("max_retrieval_calls")
+        
+        # If runtime config doesn't specify it, fall back to agent config
+        if not max_retrieval_calls:
+            max_retrieval_calls = getattr(agent, "rag_max_retrieval_calls", None)
+        
+        # Pass it to the retriever tool builder
         retriever_tool = await asyncio.to_thread(
-            _resolve_and_build_retriever_tool, agent, search_params
+            _resolve_and_build_retriever_tool, agent, search_params, max_retrieval_calls
         )
         if retriever_tool is not None:
             tools.append(retriever_tool)
@@ -340,7 +347,24 @@ def _load_recursion_limit() -> int:
 AICT_AGENT_RECURSION_LIMIT: int = _load_recursion_limit()
 
 
-def _resolve_and_build_retriever_tool(agent, caller_search_params):
+def _get_max_iterations(runtime_llm_config):
+    if not runtime_llm_config:
+        return None
+    
+    if not runtime_llm_config.agent_limits:
+        return None
+    
+    value = runtime_llm_config.agent_limits.get("max_iterations")
+
+    return value if isinstance(value, int) and value > 0 else None
+
+def _resolve_recursion_limit(runtime_llm_config):
+    return max(
+        AICT_AGENT_RECURSION_LIMIT,
+        30
+    )
+
+def _resolve_and_build_retriever_tool(agent, caller_search_params, max_retrieval_calls=None):
     """Resolve RAG precedence then build the dynamic retriever tool for *agent*.
 
     Runs synchronous DB work — precedence resolution lazy-loads
@@ -353,18 +377,35 @@ def _resolve_and_build_retriever_tool(agent, caller_search_params):
     return get_retriever_tool(
         agent.silo,
         resolved_sp,
-        getattr(agent, "rag_max_retrieval_calls", None),
+        max_retrieval_calls if max_retrieval_calls is not None else getattr(agent, "rag_max_retrieval_calls", None),
         resolved_pinned,
     )
 
 
-def prepare_agent_config(agent):
+def prepare_agent_config(agent, runtime_llm_config=None):
     """Helper function to prepare agent configuration."""
+    recursion_limit = _resolve_recursion_limit(runtime_llm_config)
+
+    logger.info(
+        "Agent recursion limit resolved to %s",
+        recursion_limit
+    )
+
+    logger.info(
+        "prepare_agent_config runtime_llm_config=%s",
+        runtime_llm_config
+    )
+
+    logger.info(
+        "prepare_agent_config agent_limits=%s",
+        getattr(runtime_llm_config, "agent_limits", None)
+    )
+
     config = {
         "configurable": {
             "thread_id": f"thread_{agent.agent_id}"
         },
-        "recursion_limit": AICT_AGENT_RECURSION_LIMIT,
+        "recursion_limit": recursion_limit,
     }
     return config
 
@@ -597,7 +638,7 @@ class IACTTool(BaseTool):
         )
         return instance
 
-    def _run(self, query: str, *args, **kwargs) -> str:
+    def _run(self, query: str) -> str:
         """Synchronous execution of the agent tool"""
         if self.react_agent is None:
             raise RuntimeError(
@@ -641,7 +682,7 @@ class IACTTool(BaseTool):
             logger.error(f"Error executing agent tool {self.name}: {str(e)}")
             return f"Error executing agent tool: {str(e)}"
     
-    async def _arun(self, query: str, *args, **kwargs) -> str:
+    async def _arun(self, query: str) -> str:
         """Asynchronous execution of the agent tool"""
         if self.react_agent is None:
             raise RuntimeError(
@@ -664,7 +705,12 @@ class IACTTool(BaseTool):
                 formatted_prompt = query
             
             messages = [HumanMessage(content=formatted_prompt)]
+
+            logger.info(f"SUBAGENT START {self.agent.agent_id}")
+
             result = await self.react_agent.ainvoke({"messages": messages})
+
+            logger.info(f"SUBAGENT END {self.agent.agent_id} result={result}")
             
             # Extract the content from the last AI message
             if isinstance(result, dict) and "messages" in result:

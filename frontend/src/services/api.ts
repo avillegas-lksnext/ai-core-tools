@@ -1299,7 +1299,8 @@ class ApiService {
     });
   }
 
-  async chatWithAgent(appId: number, agentId: number, message: string, files?: File[], searchParams?: any, conversationId?: number | null) {
+  // ==================== PLAYGROUND API ====================
+  async chatWithAgent(appId: number, agentId: number, message: string, files?: File[], searchParams?: any, conversationId?: number | null, executionProfile?: 'fast' | 'balanced' | 'deep' | 'max') {
     const formData = new FormData();
     formData.append('message', message);
     
@@ -1309,6 +1310,10 @@ class ApiService {
     
     if (conversationId) {
       formData.append('conversation_id', conversationId.toString());
+    }
+
+    if (executionProfile) {
+      formData.append('execution_profile', executionProfile);
     }
     
     if (files && files.length > 0) {

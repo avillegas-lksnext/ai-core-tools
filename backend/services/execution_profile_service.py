@@ -1,14 +1,13 @@
 from schemas.execution_profile_schemas import (
     ExecutionProfile,
     ExecutionProfileType,
-    ResolvedExecutionSettings,
 )
 
-TOOL_MAP = {
+ITERATION_MAP = {
     0: 1,  # FAST
     1: 3,  # BALANCED
-    2: 10,  # DEEP
-    3: 20,  # MAX
+    2: 5,  # DEEP
+    3: 8,  # MAX
 }
 
 RETRIEVAL_MAP = {
@@ -64,13 +63,6 @@ class ExecutionProfileService:
             return self.get_profile(ExecutionProfileType(profile_type))
         except ValueError:
             return self.get_default_profile()
-    
-    def build_execution_settings(self, profile: ExecutionProfile) -> ResolvedExecutionSettings:
-        return ResolvedExecutionSettings(
-            reasoning_level=profile.reasoning_level,
-            max_tool_calls=TOOL_MAP[profile.tool_usage_level],
-            max_retrieval_calls=RETRIEVAL_MAP[profile.retrieval_level]
-        )
     
     def get_available_profiles(self) -> list[ExecutionProfile]:
         return list(self._profiles.values())
