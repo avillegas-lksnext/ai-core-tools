@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse
+from schemas.agent_config_version_schemas import AgentConfigHistoryResponse, AgentConfigVersionRead, ConfigVersionComparisonResponse, RestoreConfigResponse
+from services.agent_config_snapshot_service import AgentConfigSnapshotService
 from utils.security import generate_signature
 import os
 from typing import Annotated, Any, AsyncGenerator, List, Optional
@@ -303,6 +305,143 @@ async def get_agent(
     return agent_detail
 
 
+@agents_router.get(
+    "/{agent_id}/config/history",
+    summary="Get agent config version history",
+    tags=["Agents", "Config History"],
+    response_model=AgentConfigHistoryResponse,
+)
+async def get_agent_config_history(
+    app_id: int,
+    agent_id: int,
+    auth_context: Annotated[AuthContext, Depends(get_current_user_oauth)],
+    role: Annotated[AppRole, Depends(require_min_role("viewer"))],
+    db: Annotated[Session, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+):
+    """
+    Get config version history for an agent (newest first).
+    """
+    _get_agent_or_404(db, agent_id, app_id)
+
+    versions = AgentConfigSnapshotService.get_history(db, agent_id=agent_id, limit=limit)
+    return AgentConfigHistoryResponse(
+        agent_id=agent_id,
+        versions=[AgentConfigVersionRead.model_validate(v) for v in versions],
+    )
+
+
+@agents_router.get(
+    "/{agent_id}/config/versions/{config_id}",
+    summary="Get specific agent config version",
+    tags=["Agents", "Config History"],
+    response_model=AgentConfigVersionRead,
+)
+async def get_agent_config_version(
+    app_id: int,
+    agent_id: int,
+    config_id: int,
+    auth_context: Annotated[AuthContext, Depends(get_current_user_oauth)],
+    role: Annotated[AppRole, Depends(require_min_role("viewer"))],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """
+    Get one config version by config_id.
+    """
+    _get_agent_or_404(db, agent_id, app_id)
+
+    version = AgentConfigSnapshotService.get_version(db, config_id=config_id)
+    if not version or version.agent_id != agent_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Config version not found")
+
+    return AgentConfigVersionRead.model_validate(version)
+
+
+@agents_router.get(
+    "/{agent_id}/config/compare",
+    summary="Compare two config versions",
+    tags=["Agents", "Config History"],
+    response_model=ConfigVersionComparisonResponse,
+)
+async def compare_agent_config_versions(
+    app_id: int,
+    agent_id: int,
+    config_id_1: Annotated[int, Query()],
+    config_id_2: Annotated[int, Query()],
+    auth_context: Annotated[AuthContext, Depends(get_current_user_oauth)],
+    role: Annotated[AppRole, Depends(require_min_role("viewer"))],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """
+    Compare two config versions and return changed fields.
+    """
+    _get_agent_or_404(db, agent_id, app_id)
+
+    v1 = AgentConfigSnapshotService.get_version(db, config_id=config_id_1)
+    v2 = AgentConfigSnapshotService.get_version(db, config_id=config_id_2)
+
+    if not v1 or v1.agent_id != agent_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Config version {config_id_1} not found")
+    if not v2 or v2.agent_id != agent_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Config version {config_id_2} not found")
+
+    comparison = AgentConfigSnapshotService.compare_versions(
+        db=db,
+        config_id_1=config_id_1,
+        config_id_2=config_id_2,
+    )
+    return ConfigVersionComparisonResponse.model_validate(comparison)
+
+
+@agents_router.post(
+    "/{agent_id}/config/restore/{config_id}",
+    summary="Restore an agent config version",
+    tags=["Agents", "Config History"],
+    response_model=RestoreConfigResponse,
+)
+async def restore_agent_config_version(
+    app_id: int,
+    agent_id: int,
+    config_id: int,
+    auth_context: Annotated[AuthContext, Depends(get_current_user_oauth)],
+    role: Annotated[AppRole, Depends(require_min_role("editor"))],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """
+    Restore a previous config by creating a new active version from it.
+    """
+    _get_agent_or_404(db, agent_id, app_id)
+
+    old_version = AgentConfigSnapshotService.get_version(db, config_id=config_id)
+    if not old_version or old_version.agent_id != agent_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Config version not found")
+
+    try:
+        new_version = AgentConfigSnapshotService.restore_version(
+            db=db,
+            config_id=config_id,
+            created_by_user_id=int(auth_context.identity.id),
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:
+        db.rollback()
+        logger.error(f"Restore config failed for agent {agent_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to restore config version",
+        )
+
+    return RestoreConfigResponse(
+        message=f"Restored version {old_version.version_number} as new active version {new_version.version_number}",
+        old_version=old_version.version_number,
+        new_version=new_version.version_number,
+        new_config=AgentConfigVersionRead.model_validate(new_version),
+    )
+
+
 @agents_router.post("/{agent_id}/export",
                    summary="Export Agent",
                    tags=["Agents", "Export/Import"],
@@ -415,6 +554,14 @@ async def create_or_update_agent(
     agent_service.update_agent_mcps(db, created_agent_id, agent_data.mcp_config_ids, {})
     agent_service.update_agent_skills(db, created_agent_id, agent_data.skill_ids, {})
 
+    fresh_agent = agent_service.get_agent(db, created_agent_id)
+    AgentConfigSnapshotService.create_snapshot(
+        db=db,
+        agent=fresh_agent,
+        created_by_user_id=int(auth_context.identity.id),
+    )
+    db.commit()  # Commit after snapshot creation to ensure version is saved
+
     # Return updated agent (reuse the GET logic)
     return await get_agent(app_id, created_agent_id, auth_context, role, db, agent_service)
 
@@ -508,6 +655,15 @@ async def update_agent_prompt(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=AGENT_NOT_FOUND_ERROR
         )
+    
+    # Capture new config version snapshot after prompt update
+    updated_agent = agent_service.get_agent(db, agent_id)
+    AgentConfigSnapshotService.create_snapshot(
+        db=db,
+        agent=updated_agent,
+        created_by_user_id=int(auth_context.identity.id),
+    )
+    db.commit()  # Commit after snapshot creation to ensure version is saved
     
     return {"message": f"{prompt_data.type.capitalize()} prompt updated successfully"}
 
