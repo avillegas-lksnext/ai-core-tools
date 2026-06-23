@@ -1,3 +1,5 @@
+import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status, Request, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse
 from schemas.agent_config_version_schemas import AgentConfigHistoryResponse, AgentConfigVersionRead, ConfigVersionComparisonResponse, RestoreConfigResponse
@@ -37,10 +39,17 @@ from schemas.config_audit_schemas import (
     ConfigAuditLogRead,
     FieldChangeHistoryResponse,
 )
+from schemas.config_audit_analytics_schemas import (
+    ChangeTimeline,
+    RiskAnalysisResponse,
+    AuditFilterResponse,
+    ChangeFrequencySummary,
+)
 from services.agent_execution_service import AgentExecutionService
 from services.agent_streaming_service import AgentStreamingService
 from services.file_management_service import FileManagementService, FileReference
 from services.config_audit_service import ConfigAuditService
+from services.config_audit_analytics_service import ConfigAuditAnalyticsService
 from routers.internal.auth_utils import get_current_user_oauth
 from routers.controls.file_size_limit import enforce_file_size_limit
 from routers.controls.role_authorization import require_min_role, AppRole
@@ -1438,6 +1447,249 @@ async def download_file(
     except Exception as e:
         logger.error(f"Error in download file endpoint: {e}")
         raise HTTPException(status_code=500, detail="File download failed")
+
+
+# ==================== AUDIT ANALYTICS ====================
+
+@agents_router.get(
+    "/{agent_id}/audit/filter",
+    summary="Advanced audit filtering",
+    tags=["Agents", "Audit Analytics"],
+    response_model=AuditFilterResponse,
+)
+async def filter_audit_logs(
+    app_id: int,
+    agent_id: int,
+    auth_context: Annotated[AuthContext, Depends(get_current_user_oauth)],
+    role: Annotated[AppRole, Depends(require_min_role("viewer"))],
+    db: Annotated[Session, Depends(get_db)],
+    start_date: Annotated[Optional[str], Query(description="ISO format date, e.g., 2026-01-01")] = None,
+    end_date: Annotated[Optional[str], Query(description="ISO format date, e.g., 2026-01-31")] = None,
+    change_types: Annotated[Optional[List[str]], Query(description="Filter by change types")] = None,
+    changed_by_user_id: Annotated[Optional[int], Query()] = None,
+    field_name: Annotated[Optional[str], Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    """
+    Advanced filtering of audit logs.
+    
+    Query params:
+    - start_date: ISO format (e.g., 2026-01-01)
+    - end_date: ISO format
+    - change_types: Comma-separated or multiple (CREATE, UPDATE, RESTORE, PROMPT_UPDATE, SKILL_CHANGE, TOOL_CHANGE, MCP_CHANGE)
+    - changed_by_user_id: User who made the change
+    - field_name: Specific field (system_prompt, persona, domain, tone, constraints, allowed_tools, memory_scope)
+    """
+    _get_agent_or_404(db, agent_id, app_id)
+    
+    # Parse dates
+    start_dt = None
+    end_dt = None
+    
+    if start_date:
+        try:
+            start_dt = datetime.fromisoformat(start_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_date format. Use ISO format (YYYY-MM-DD)")
+    
+    if end_date:
+        try:
+            end_dt = datetime.fromisoformat(end_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid end_date format. Use ISO format (YYYY-MM-DD)")
+    
+    logs, total_count = ConfigAuditAnalyticsService.filter_audit_logs(
+        db=db,
+        agent_id=agent_id,
+        app_id=app_id,
+        start_date=start_dt,
+        end_date=end_dt,
+        change_types=change_types,
+        changed_by_user_id=changed_by_user_id,
+        field_name=field_name,
+        limit=limit,
+        offset=offset,
+    )
+    
+    return {
+        "agent_id": agent_id,
+        "total_count": total_count,
+        "limit": limit,
+        "offset": offset,
+        "logs": [ConfigAuditLogRead.model_validate(log) for log in logs],
+    }
+
+
+@agents_router.get(
+    "/{agent_id}/audit/timeline",
+    summary="Timeline of config changes",
+    tags=["Agents", "Audit Analytics"],
+    response_model=ChangeTimeline,
+)
+async def get_change_timeline(
+    app_id: int,
+    agent_id: int,
+    auth_context: Annotated[AuthContext, Depends(get_current_user_oauth)],
+    role: Annotated[AppRole, Depends(require_min_role("viewer"))],
+    db: Annotated[Session, Depends(get_db)],
+    start_date: Annotated[Optional[str], Query(description="ISO format date")] = None,
+    end_date: Annotated[Optional[str], Query(description="ISO format date")] = None,
+):
+    """
+    Get chronological timeline of config changes.
+    
+    Returns oldest to newest changes with human-readable summaries.
+    """
+    _get_agent_or_404(db, agent_id, app_id)
+    
+    start_dt = None
+    end_dt = None
+    
+    if start_date:
+        try:
+            start_dt = datetime.fromisoformat(start_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_date format")
+    
+    if end_date:
+        try:
+            end_dt = datetime.fromisoformat(end_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid end_date format")
+    
+    timeline = ConfigAuditAnalyticsService.get_change_timeline(
+        db=db,
+        agent_id=agent_id,
+        app_id=app_id,
+        start_date=start_dt,
+        end_date=end_dt,
+    )
+    
+    return timeline
+
+
+@agents_router.get(
+    "/{agent_id}/audit/risk-analysis",
+    summary="Risk analysis of config changes",
+    tags=["Agents", "Audit Analytics"],
+    response_model=RiskAnalysisResponse,
+)
+async def get_risk_analysis(
+    app_id: int,
+    agent_id: int,
+    auth_context: Annotated[AuthContext, Depends(get_current_user_oauth)],
+    role: Annotated[AppRole, Depends(require_min_role("viewer"))],
+    db: Annotated[Session, Depends(get_db)],
+    days: Annotated[int, Query(ge=1, le=365)] = 30,
+):
+    """
+    Risk analysis of config changes.
+    
+    Identifies risky changes:
+    - System prompt updates
+    - Tool/skill changes by non-admins
+    - High-frequency changes (>5/day anomaly)
+    
+    Returns risk score (0-100) and flagged changes.
+    """
+    _get_agent_or_404(db, agent_id, app_id)
+    
+    analysis = ConfigAuditAnalyticsService.get_risk_analysis(
+        db=db,
+        agent_id=agent_id,
+        app_id=app_id,
+        days=days,
+    )
+    
+    return analysis
+
+
+@agents_router.get(
+    "/{agent_id}/audit/frequency-summary",
+    summary="Change frequency summary",
+    tags=["Agents", "Audit Analytics"],
+    response_model=ChangeFrequencySummary,
+)
+async def get_frequency_summary(
+    app_id: int,
+    agent_id: int,
+    auth_context: Annotated[AuthContext, Depends(get_current_user_oauth)],
+    role: Annotated[AppRole, Depends(require_min_role("viewer"))],
+    db: Annotated[Session, Depends(get_db)],
+    days: Annotated[int, Query(ge=1, le=365)] = 30,
+):
+    """
+    Get summary of change frequency by date, type, and user.
+    
+    Useful for:
+    - Identifying change patterns
+    - Detecting anomalies (sudden spikes)
+    - Accountability per user
+    """
+    _get_agent_or_404(db, agent_id, app_id)
+    
+    summary = ConfigAuditAnalyticsService.get_change_frequency_summary(
+        db=db,
+        agent_id=agent_id,
+        app_id=app_id,
+        days=days,
+    )
+    
+    return summary
+
+
+@agents_router.get(
+    "/{agent_id}/audit/export-csv",
+    summary="Export audit history to CSV",
+    tags=["Agents", "Audit Analytics"],
+)
+async def export_audit_csv(
+    app_id: int,
+    agent_id: int,
+    auth_context: Annotated[AuthContext, Depends(get_current_user_oauth)],
+    role: Annotated[AppRole, Depends(require_min_role("editor"))],
+    db: Annotated[Session, Depends(get_db)],
+    start_date: Annotated[Optional[str], Query(description="ISO format date")] = None,
+    end_date: Annotated[Optional[str], Query(description="ISO format date")] = None,
+):
+    """
+    Export audit log to CSV format.
+    
+    Returns:
+        CSV file with audit history (downloadable)
+    """
+    _get_agent_or_404(db, agent_id, app_id)
+    
+    start_dt = None
+    end_dt = None
+    
+    if start_date:
+        try:
+            start_dt = datetime.fromisoformat(start_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_date format")
+    
+    if end_date:
+        try:
+            end_dt = datetime.fromisoformat(end_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid end_date format")
+    
+    csv_content = ConfigAuditAnalyticsService.export_audit_to_csv(
+        db=db,
+        agent_id=agent_id,
+        app_id=app_id,
+        start_date=start_dt,
+        end_date=end_dt,
+    )
+    
+    # Return as downloadable file
+    return StreamingResponse(
+        iter([csv_content]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=audit_export_{agent_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"},
+    )
 
 
 # ==================== MARKETPLACE MANAGEMENT ====================
