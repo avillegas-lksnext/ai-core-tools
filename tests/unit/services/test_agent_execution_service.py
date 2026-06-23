@@ -40,7 +40,12 @@ def make_agent(
     agent.output_parser_id = None
     agent.request_count = 0
     agent.is_frozen = is_frozen  # SaaS mode: must be explicitly False to avoid MagicMock truthiness
-    agent.ai_service = None
+
+    # Add mock ai_service
+    agent.ai_service = MagicMock()
+    agent.ai_service.provider = "openai"
+    agent.ai_service.description = "gpt-4"
+
     agent.prompt_template = MagicMock()
     agent.prompt_template.format.return_value = "formatted message"
     return agent

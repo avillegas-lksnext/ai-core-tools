@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.orm import Session
 
+from services.agent_registry_service import AgentRegistryService
 from schemas.runtime_llm_config_schemas import RuntimeLLMConfig
 from models.agent import Agent
 from models.ocr_agent import OCRAgent
@@ -230,6 +231,16 @@ class AgentExecutionService:
         fresh_agent = self.agent_execution_repo.get_agent_with_relationships(db, agent_id)
         if not fresh_agent:
             raise HTTPException(status_code=404, detail="Agent not found in database")
+        
+        # Immutable config layer (create v1 lazily if missing)
+        registry = AgentRegistryService()
+        active_config = registry.get_active_config(db, agent_id)
+        if not active_config:
+            active_config = registry.ensure_initial_version(
+                db=db,
+                agent=fresh_agent,
+                created_by_user_id=(user_context or {}).get("user_id"),
+            )
 
         # 8. Build enhanced message + separate image files
         enhanced_message, image_files = self._prepare_message_with_files(message, processed_files)
@@ -262,6 +273,10 @@ class AgentExecutionService:
         execution_config = resolver.resolve(resolved_profile)
 
         capability_service = ModelCapabilityService()
+
+        if not fresh_agent.ai_service:
+            raise ValueError(f"Agent {agent_id} must have an AI service configured")
+        
         provider = fresh_agent.ai_service.provider
         model_name = fresh_agent.ai_service.description or ""
         capabilities = capability_service.get_capabilities(provider, model_name)
@@ -277,6 +292,23 @@ class AgentExecutionService:
             agent_id=agent_id,
             agent=agent,
             fresh_agent=fresh_agent,
+
+            # Immutable config layer
+            agent_config_id=active_config.config_id,
+            agent_config_version=active_config.version_number,
+            system_prompt=active_config.system_prompt or "",
+            persona=active_config.persona,
+            domain=active_config.domain,
+            tone=active_config.tone,
+            constraints=active_config.constraints or [],
+            allowed_tools=active_config.allowed_tools or [],
+            memory_scope=active_config.memory_scope or "none",
+
+            # Dynamic execution layer
+            execution_profile=resolved_profile,
+            derived_tool_policy=resolved_profile.tool_depth,
+            derived_rag_policy=resolved_profile.rag_enabled,
+
             enhanced_message=enhanced_message,
             image_files=image_files,
             session=session,

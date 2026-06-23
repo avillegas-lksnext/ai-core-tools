@@ -140,6 +140,14 @@ class Agent(Base):
         cascade='all, delete-orphan'
     )
 
+    config_versions = relationship(
+        "AgentConfigVersion",
+        foreign_keys="AgentConfigVersion.agent_id",
+        back_populates="agent",
+        cascade="all, delete-orphan",
+        order_by="AgentConfigVersion.version_number.desc()",
+    )
+
     __mapper_args__ = {
         'polymorphic_identity': 'agent',
         'polymorphic_on': type

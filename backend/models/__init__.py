@@ -32,6 +32,7 @@ from .tier_config import TierConfig
 from .usage_record import UsageRecord
 from .user_credential import UserCredential
 from .refresh_token import RefreshToken
+from .agent_config_version import AgentConfigVersion
 
 __all__ = [
     'User', 'App', 'AppCollaborator', 'APIKey',
@@ -40,7 +41,7 @@ __all__ = [
     'Repository', 'Resource', 'Folder', 'Domain',
     'DomainUrl', 'CrawlPolicy', 'CrawlJob', 'SharePointSource', 'SharePointFile',
     'AIService', 'EmbeddingService', 'OutputParser', 'MCPConfig', 'Silo',
-    'Agent', 'Skill', 'OCRAgent', 'Conversation', 'Repository', 'Resource', 'Folder', 'Domain',
+    'Agent', 'AgentConfigVersion', 'Skill', 'OCRAgent', 'Conversation', 'Repository', 'Resource', 'Folder', 'Domain',
     'Media',
     'MCPServer', 'MCPServerAgent',
     'SystemSetting',

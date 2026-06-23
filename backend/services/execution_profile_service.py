@@ -1,6 +1,7 @@
 from schemas.execution_profile_schemas import (
     ExecutionProfile,
     ExecutionProfileType,
+    ToolDepth,
 )
 
 ITERATION_MAP = {
@@ -24,28 +25,48 @@ class ExecutionProfileService:
             label="Fast",
             reasoning_level=0,
             tool_usage_level=0,
-            retrieval_level=0
+            retrieval_level=0,
+            max_steps=1,
+            tool_depth=ToolDepth.NONE,
+            rag_enabled=False,
+            latency_budget_ms=2000,
+            cost_budget=0.01,
         ),
         ExecutionProfileType.BALANCED: ExecutionProfile(
             id=ExecutionProfileType.BALANCED,
             label="Balanced",
             reasoning_level=1,
             tool_usage_level=1,
-            retrieval_level=1
+            retrieval_level=1,
+            max_steps=1,
+            tool_depth=ToolDepth.LIGHT,
+            rag_enabled=True,
+            latency_budget_ms=5000,
+            cost_budget=0.05,
         ),
         ExecutionProfileType.DEEP: ExecutionProfile(
             id=ExecutionProfileType.DEEP,
             label="Deep",
             reasoning_level=2,
             tool_usage_level=2,
-            retrieval_level=2
+            retrieval_level=2,
+            max_steps=3,
+            tool_depth=ToolDepth.FULL,
+            rag_enabled=True,
+            latency_budget_ms=15000,
+            cost_budget=0.15,
         ),
         ExecutionProfileType.MAX: ExecutionProfile(
             id=ExecutionProfileType.MAX,
             label="Max",
             reasoning_level=3,
             tool_usage_level=3,
-            retrieval_level=3
+            retrieval_level=3,
+            max_steps=6,
+            tool_depth=ToolDepth.FULL,
+            rag_enabled=True,
+            latency_budget_ms=30000,
+            cost_budget=0.3,
         ),
     }
 
