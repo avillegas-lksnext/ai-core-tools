@@ -5,10 +5,13 @@ Handles creating immutable snapshots of agent configuration state,
 retrieving history, and restoring prior versions.
 """
 from typing import List, Optional
+from datetime import datetime
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 from models.agent import Agent
 from models.agent_config_version import AgentConfigVersion
+from models.config_audit_log import ChangeType
+from services.config_audit_service import ConfigAuditService
 
 class AgentConfigSnapshotService:
     """Service for managing agent config version snapshots and history."""
@@ -18,25 +21,19 @@ class AgentConfigSnapshotService:
         db: Session,
         agent: Agent,
         created_by_user_id: int | None = None,
-        reason: str | None = None,
+        change_reason: str = None
     ) -> AgentConfigVersion:
         """
-        Create a new immutable config snapshot from current agent state.
-        
-        Increments version_number, deactivates prior active version, and
-        marks new snapshot as is_active=True.
+        Create a new config version snapshot.
         
         Args:
             db: Database session
-            agent: Agent ORM instance (must be committed or flushed)
-            created_by_user_id: User ID for audit trail
-            reason: Optional reason for snapshot (e.g., "Manual update", "System backup")
+            agent: Fresh agent instance with current state
+            created_by_user_id: User ID who created this snapshot
+            change_reason: Optional reason for this snapshot (e.g., "Updated system prompt for v2")
         
         Returns:
-            New AgentConfigVersion with incremented version_number and is_active=True
-        
-        Raises:
-            ValueError: If agent not found or not yet persisted
+            New AgentConfigVersion instance
         """
         # Fetch fresh agent to ensure we have latest state
         current_agent = db.query(Agent).filter(Agent.agent_id == agent.agent_id).first()
@@ -74,6 +71,18 @@ class AgentConfigSnapshotService:
         )
         db.add(snapshot)
         db.flush()
+
+        # Log the snapshot creation
+        ConfigAuditService.log_change(
+            db=db,
+            agent_id=agent.agent_id,
+            app_id=current_agent.app_id,
+            config_id=snapshot.config_id,
+            change_type=ChangeType.CREATE,
+            changed_by_user_id=created_by_user_id,
+            change_reason=change_reason or "Config version snapshot created",
+        )
+
         return snapshot
     
     @staticmethod
@@ -125,6 +134,7 @@ class AgentConfigSnapshotService:
         db: Session,
         config_id: int,
         created_by_user_id: int | None = None,
+        change_reason: str = None,
     ) -> AgentConfigVersion:
         """
         Restore a prior config version by creating a new snapshot from it.
@@ -136,6 +146,7 @@ class AgentConfigSnapshotService:
             db: Database session
             config_id: Config version ID to restore from
             created_by_user_id: User ID for audit trail
+            change_reason: Optional reason for the restore
         
         Returns:
             New AgentConfigVersion with copied values and incremented version_number
@@ -150,6 +161,7 @@ class AgentConfigSnapshotService:
             raise ValueError(f"Config version {config_id} not found")
 
         agent_id = old_config.agent_id
+        app_id = db.query(Agent).filter(Agent.agent_id == agent_id).first().app_id
 
         # Deactivate current active version
         db.query(AgentConfigVersion).filter(
@@ -182,6 +194,19 @@ class AgentConfigSnapshotService:
         )
         db.add(new_snapshot)
         db.flush()
+
+        # Log the restore action
+        ConfigAuditService.log_change(
+            db=db,
+            agent_id=agent_id,
+            app_id=app_id,
+            config_id=new_snapshot.config_id,
+            change_type=ChangeType.RESTORE,
+            changed_by_user_id=created_by_user_id,
+            change_reason=change_reason or f"Restored from version {old_config.version_number}",
+            related_config_id=config_id,
+        )
+
         return new_snapshot
     
     @staticmethod

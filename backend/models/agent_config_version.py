@@ -36,6 +36,11 @@ class AgentConfigVersion(Base):
         back_populates='config_versions',
     )
 
+    audit_logs = relationship(
+        'ConfigAuditLog',
+        back_populates='agent_config_version',
+    )
+
     __table_args__ = (
         UniqueConstraint('agent_id', 'version_number', name='uq_agent_config_version'),
     )

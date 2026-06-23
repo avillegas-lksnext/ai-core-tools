@@ -31,9 +31,16 @@ from schemas.marketplace_schemas import (
     MarketplaceProfileCreateUpdateSchema,
     MarketplaceProfileSchema,
 )
+from schemas.config_audit_schemas import (
+    ConfigAuditHistoryResponse,
+    AgentAuditHistoryResponse,
+    ConfigAuditLogRead,
+    FieldChangeHistoryResponse,
+)
 from services.agent_execution_service import AgentExecutionService
 from services.agent_streaming_service import AgentStreamingService
 from services.file_management_service import FileManagementService, FileReference
+from services.config_audit_service import ConfigAuditService
 from routers.internal.auth_utils import get_current_user_oauth
 from routers.controls.file_size_limit import enforce_file_size_limit
 from routers.controls.role_authorization import require_min_role, AppRole
@@ -406,6 +413,7 @@ async def restore_agent_config_version(
     auth_context: Annotated[AuthContext, Depends(get_current_user_oauth)],
     role: Annotated[AppRole, Depends(require_min_role("editor"))],
     db: Annotated[Session, Depends(get_db)],
+    reason: Annotated[Optional[str], Query()] = None,
 ):
     """
     Restore a previous config by creating a new active version from it.
@@ -421,6 +429,7 @@ async def restore_agent_config_version(
             db=db,
             config_id=config_id,
             created_by_user_id=int(auth_context.identity.id),
+            change_reason=reason,
         )
         db.commit()
     except ValueError as exc:
@@ -439,6 +448,118 @@ async def restore_agent_config_version(
         old_version=old_version.version_number,
         new_version=new_version.version_number,
         new_config=AgentConfigVersionRead.model_validate(new_version),
+    )
+
+
+@agents_router.get(
+        "/{agent_id}/config/audit/history",
+        summary="Get complete agent config audit history",
+        tags=["Agents", "Config Audit"],
+        response_model=AgentAuditHistoryResponse,
+)
+async def get_agent_audit_history(
+    app_id: int,
+    agent_id: int,
+    auth_context: Annotated[AuthContext, Depends(get_current_user_oauth)],
+    role: Annotated[AppRole, Depends(require_min_role("viewer"))],
+    db: Annotated[Session, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+):
+    """
+    Get complete audit history for an agent (all config versions, newest first).
+    Shows who changed what, when, and why.
+    """
+    _get_agent_or_404(db, agent_id, app_id)
+
+    audit_logs = ConfigAuditService.get_agent_audit_history(
+        db=db,
+        agent_id=agent_id,
+        app_id=app_id,
+        limit=limit,
+    )
+    return AgentAuditHistoryResponse(
+        agent_id=agent_id,
+        total_entries=len(audit_logs),
+        audit_logs=[ConfigAuditLogRead.model_validate(log) for log in audit_logs],
+    )
+
+
+@agents_router.get(
+    "/{agent_id}/config/versions/{config_id}/audit",
+    summary="Get audit log for a specific config version",
+    tags=["Agents", "Config Audit"],
+    response_model=ConfigAuditHistoryResponse,
+)
+async def get_config_audit_log(
+    app_id: int,
+    agent_id: int,
+    config_id: int,
+    auth_context: Annotated[AuthContext, Depends(get_current_user_oauth)],
+    role: Annotated[AppRole, Depends(require_min_role("viewer"))],
+    db: Annotated[Session, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+):
+    """
+    Get audit log entries for a specific config version.
+    Tracks all field changes, restores, and modifications to this version.
+    """
+    _get_agent_or_404(db, agent_id, app_id)
+
+    version = AgentConfigSnapshotService.get_version(db, config_id=config_id)
+    if not version or version.agent_id != agent_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Config version not found")
+
+    audit_logs = ConfigAuditService.get_audit_history(
+        db=db,
+        config_id=config_id,
+        limit=limit,
+    )
+    return ConfigAuditHistoryResponse(
+        config_id=config_id,
+        total_entries=len(audit_logs),
+        audit_logs=[ConfigAuditLogRead.model_validate(log) for log in audit_logs],
+    )
+
+
+@agents_router.get(
+    "/{agent_id}/config/field-changes",
+    summary="Get change history for a specific field",
+    tags=["Agents", "Config Audit"],
+    response_model=FieldChangeHistoryResponse,
+)
+async def get_field_change_history(
+    app_id: int,
+    agent_id: int,
+    field_name: Annotated[str, Query()],  # e.g., "system_prompt", "allowed_tools"
+    auth_context: Annotated[AuthContext, Depends(get_current_user_oauth)],
+    role: Annotated[AppRole, Depends(require_min_role("viewer"))],
+    db: Annotated[Session, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+):
+    """
+    Get history of changes to a specific field across all config versions.
+    Useful for tracking evolution of system_prompt, allowed_tools, etc.
+    """
+    _get_agent_or_404(db, agent_id, app_id)
+
+    valid_fields = ["system_prompt", "persona", "domain", "tone", "constraints", "allowed_tools", "memory_scope"]
+    if field_name not in valid_fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid field_name. Must be one of: {', '.join(valid_fields)}"
+        )
+
+    changes = ConfigAuditService.get_field_change_history(
+        db=db,
+        agent_id=agent_id,
+        field_name=field_name,
+        limit=limit,
+    )
+    return FieldChangeHistoryResponse(
+        agent_id=agent_id,
+        field_name=field_name,
+        total_entries=len(changes),
+        changes=[ConfigAuditLogRead.model_validate(log) for log in changes],
     )
 
 
