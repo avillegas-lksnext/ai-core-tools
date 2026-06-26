@@ -211,6 +211,21 @@ async def create_agent(agent: Agent, search_params=None, session_id=None, user_c
             f"trim_tokens_to_summarize={trim_tokens}"
         )
 
+    agent_limits = None
+    if runtime_llm_config and runtime_llm_config.agent_limits:
+        agent_limits = runtime_llm_config.agent_limits
+    
+    max_iterations = agent_limits.get("max_iterations") if agent_limits else None
+
+    if max_iterations and max_iterations > 0:
+        from tools.max_tool_rounds_middleware import MaxToolRoundsMiddleware
+        max_tool_rounds = MaxToolRoundsMiddleware(max_rounds=max_iterations)
+        middleware.append(max_tool_rounds)
+        logger.info(
+            f"MaxToolRoundsMiddleware configured for agent {agent.agent_id}: "
+            f"max_rounds={max_iterations}"
+        )
+
     tools = []
 
     # Provider-side tools — injected from agent.server_tools using provider-specific formats
@@ -310,59 +325,7 @@ async def create_agent(agent: Agent, search_params=None, session_id=None, user_c
     logger.info(f"Memory enabled: {agent.has_memory}")
     logger.info(f"Output parser: {agent.output_parser_id is not None}")
 
-    return agent_chain, mcp_client
-
-
-_DEFAULT_RECURSION_LIMIT = 50
-
-
-def _load_recursion_limit() -> int:
-    """Read AICT_AGENT_RECURSION_LIMIT from the environment once at module load.
-
-    Logs a WARNING and falls back to 50 when the value is absent, non-integer, or
-    below 1 (LangGraph requires recursion_limit >= 1; a value < 1 fails every turn).
-    """
-    raw = os.getenv("AICT_AGENT_RECURSION_LIMIT")
-    if raw is None:
-        return _DEFAULT_RECURSION_LIMIT
-    try:
-        value = int(raw)
-    except (ValueError, TypeError):
-        logger.warning(
-            "prepare_agent_config: AICT_AGENT_RECURSION_LIMIT=%r is not a valid integer; "
-            "using default %d",
-            raw, _DEFAULT_RECURSION_LIMIT,
-        )
-        return _DEFAULT_RECURSION_LIMIT
-    if value < 1:
-        logger.warning(
-            "prepare_agent_config: AICT_AGENT_RECURSION_LIMIT=%r is < 1 (invalid); "
-            "using default %d",
-            raw, _DEFAULT_RECURSION_LIMIT,
-        )
-        return _DEFAULT_RECURSION_LIMIT
-    return value
-
-
-AICT_AGENT_RECURSION_LIMIT: int = _load_recursion_limit()
-
-
-def _get_max_iterations(runtime_llm_config):
-    if not runtime_llm_config:
-        return None
-    
-    if not runtime_llm_config.agent_limits:
-        return None
-    
-    value = runtime_llm_config.agent_limits.get("max_iterations")
-
-    return value if isinstance(value, int) and value > 0 else None
-
-def _resolve_recursion_limit(runtime_llm_config):
-    return max(
-        AICT_AGENT_RECURSION_LIMIT,
-        30
-    )
+    return agent_chain, mcp_client, llm
 
 def _resolve_and_build_retriever_tool(agent, caller_search_params, max_retrieval_calls=None):
     """Resolve RAG precedence then build the dynamic retriever tool for *agent*.
@@ -384,13 +347,6 @@ def _resolve_and_build_retriever_tool(agent, caller_search_params, max_retrieval
 
 def prepare_agent_config(agent, runtime_llm_config=None):
     """Helper function to prepare agent configuration."""
-    recursion_limit = _resolve_recursion_limit(runtime_llm_config)
-
-    logger.info(
-        "Agent recursion limit resolved to %s",
-        recursion_limit
-    )
-
     logger.info(
         "prepare_agent_config runtime_llm_config=%s",
         runtime_llm_config
@@ -398,16 +354,15 @@ def prepare_agent_config(agent, runtime_llm_config=None):
 
     logger.info(
         "prepare_agent_config agent_limits=%s",
-        getattr(runtime_llm_config, "agent_limits", None)
+        getattr(runtime_llm_config, "agent_limits", None) if runtime_llm_config else None
     )
 
-    config = {
+    return {
         "configurable": {
             "thread_id": f"thread_{agent.agent_id}"
-        },
-        "recursion_limit": recursion_limit,
+        }
+        # recursion_limit REMOVED — middleware now handles max iterations
     }
-    return config
 
 
 def parse_agent_response(response_text, agent):

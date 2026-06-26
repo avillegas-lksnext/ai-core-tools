@@ -337,7 +337,7 @@ def _build_openai_runtime_kwargs(runtime_llm_config):
         return {}
 
     effort_map = {
-        0: "minimal",
+        0: None,
         1: "low",
         2: "medium",
         3: "high",

@@ -12,6 +12,9 @@ from typing import AsyncGenerator, Dict, List, Any
 import psycopg.errors
 from sqlalchemy.orm import Session
 
+from langgraph.errors import GraphRecursionError
+from langchain_core.messages import AIMessage
+
 from tools.agentTools import create_agent, prepare_agent_config, build_human_message
 from tools.langsmith_config import (
     apply_tracing_to_config,
@@ -25,6 +28,7 @@ from tools.streaming_utils import (
 )
 from services.agent_execution_service import AgentExecutionService
 from utils.logger import get_logger
+from utils.exceptions import ToolRoundLimitReached
 
 logger = get_logger(__name__)
 
@@ -122,7 +126,7 @@ class AgentStreamingService:
             # ----------------------------------------------------------------
             # 3. Build agent chain
             # ----------------------------------------------------------------
-            agent_chain, mcp_client = await create_agent(
+            agent_chain, mcp_client, llm = await create_agent(
                 ctx.fresh_agent,
                 ctx.search_params,
                 ctx.session_id_for_cache,
@@ -186,17 +190,145 @@ class AgentStreamingService:
 
             accumulated_content = ""
 
-            async for mode, chunk in agent_chain.astream(
-                {"messages": [message_payload]},
-                config=config,
-                stream_mode=["messages", "updates"],
-            ):
-                events = map_stream_event(mode, chunk)
-                if events:
-                    for event in events:
-                        if event["type"] == SSE_TOKEN:
-                            accumulated_content += event["data"].get("content", "")
-                        yield format_sse_event(event["type"], event["data"])
+            max_iters = None
+            if ctx.runtime_llm_config and ctx.runtime_llm_config.agent_limits:
+                max_iters = ctx.runtime_llm_config.agent_limits.get("max_iterations")
+            
+            input_state = {
+                "messages": [message_payload],
+                "_current_tool_rounds": 0,
+            }
+
+            tool_budget_exhausted = False
+
+            tool_outputs: List[str] = []
+
+            partial_response = False
+
+            try:
+                async for mode, chunk in agent_chain.astream(
+                    input_state,
+                    config=config,
+                    stream_mode=["messages", "updates"],
+                ):
+                    events = map_stream_event(mode, chunk)
+
+                    if events:
+                        for event in events:
+                            if event["type"] == SSE_TOKEN:
+                                accumulated_content += event["data"].get(
+                                    "content",
+                                    ""
+                                )
+
+                            yield format_sse_event(
+                                event["type"],
+                                event["data"],
+                            )
+                    
+                    if mode == "updates":
+                        def extract_messages(obj):
+                            if isinstance(obj, dict):
+
+                                if "messages" in obj:
+                                    yield from obj["messages"]
+
+                                for value in obj.values():
+                                    yield from extract_messages(value)
+
+                            elif isinstance(obj, list):
+
+                                for item in obj:
+                                    yield from extract_messages(item)
+                        
+                        for msg in extract_messages(chunk):
+
+                            if msg.__class__.__name__ == "ToolMessage":
+
+                                content = getattr(msg, "content", None)
+
+                                if content:
+                                    tool_outputs.append(str(content))
+
+            except ToolRoundLimitReached as exc:
+
+                logger.info(
+                    "Tool round limit reached for agent %s "
+                    "(used=%d max=%d)",
+                    ctx.agent_id,
+                    exc.rounds_used,
+                    exc.max_rounds,
+                )
+
+                tool_budget_exhausted = True
+
+            except GraphRecursionError as gre:
+
+                logger.warning(
+                    "Streaming hit recursion/tool limit for agent %s; "
+                    "finishing with partial output: %s",
+                    ctx.agent_id,
+                    str(gre),
+                )
+
+                if not accumulated_content.strip():
+                    accumulated_content = (
+                        "I reached the operational limit while solving "
+                        "this request. Here is the best result I could "
+                        "produce so far."
+                    )
+                
+                partial_response = True
+                
+            if tool_budget_exhausted:
+                logger.info(
+                    "Generating final answer from gathered tool results"
+                )
+
+                if tool_outputs:
+
+                    synthesis_prompt = f"""
+                        You have reached the maximum tool budget.
+
+                        ORIGINAL USER REQUEST:
+
+                        {message}
+
+                        INSTRUCTIONS:
+
+                        1. Respond in exactly the same language as the original user request.
+                        2. Use only information contained in the tool results.
+                        3. Never invent information that was not obtained from the tools.
+                        4. Complete every part of the request that can be answered.
+                        5. If some parts cannot be completed because the required tool results are missing, explicitly state that.
+                        6. Do not mention tool budgets, tool limits, internal system details, or implementation details.
+                        7. Provide a coherent final answer, not a list of limitations.
+
+                        TOOL RESULTS:
+
+                        {chr(10).join(tool_outputs)}
+                    """
+
+                    final_response = await llm.ainvoke(
+                        synthesis_prompt
+                    )
+
+                    accumulated_content = str(
+                        getattr(
+                            final_response,
+                            "content",
+                            final_response,
+                        )
+                    )
+
+                    await agent_chain.aupdate_state(
+                        config,
+                        {
+                            "messages": [
+                                AIMessage(content=accumulated_content)
+                            ]
+                        },
+                    )
 
             # ----------------------------------------------------------------
             # 7. Post-processing phase — delegates to AgentExecutionService
@@ -208,13 +340,20 @@ class AgentStreamingService:
             # ----------------------------------------------------------------
             # 8. Emit done event
             # ----------------------------------------------------------------
+            done_payload = {
+                "response": result["parsed_response"],
+                "conversation_id": result["effective_conv_id"],
+                "files": result["files_data"],
+                "partial": partial_response,    # only when recursion error occurred
+            }
+
             yield format_sse_event(
                 "done",
-                {
-                    "response": result["parsed_response"],
-                    "conversation_id": result["effective_conv_id"],
-                    "files": result["files_data"],
-                },
+                done_payload,
+            )
+
+            logger.info(
+                "DONE EVENT YIELDED"
             )
 
         except (

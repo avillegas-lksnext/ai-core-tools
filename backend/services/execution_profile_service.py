@@ -1,3 +1,5 @@
+from services.model_capability_service import ModelCapabilityService
+from models.ai_service import AIService
 from schemas.execution_profile_schemas import (
     ExecutionProfile,
     ExecutionProfileType,

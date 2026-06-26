@@ -269,6 +269,12 @@ def _map_updates_chunk(chunk: Any) -> list[dict] | None:
             # State delta may store a single message
             messages = [messages]
 
+        logger.info(
+            "NODE=%s STATE_DELTA_KEYS=%s",
+            node_name,
+            list(state_delta.keys()) if isinstance(state_delta, dict) else None,
+        )
+
         for msg in messages:
             if msg is None:
                 continue
@@ -304,6 +310,14 @@ def _map_updates_chunk(chunk: Any) -> list[dict] | None:
 
                     # Emit thinking status alongside tool_start
                     thinking_msg = get_thinking_message(tool_name)
+
+                    logger.info(
+                        "TOOL CALL REQUESTED: tool=%s id=%s args=%s",
+                        tool_name,
+                        tool_call_id,
+                        tool_args,
+                    )
+
                     events.append({
                         "type": SSE_THINKING,
                         "data": {"message": thinking_msg, "tool_name": tool_name},
@@ -324,6 +338,13 @@ def _map_updates_chunk(chunk: Any) -> list[dict] | None:
                 try:
                     tool_call_id = getattr(msg, "tool_call_id", "") or ""
                     tool_name_end = getattr(msg, "name", "") or ""
+
+                    logger.info(
+                        "TOOL RESULT RECEIVED: tool=%s id=%s",
+                        tool_name_end,
+                        tool_call_id,
+                    )
+
                     events.append({
                         "type": SSE_TOOL_END,
                         "data": {

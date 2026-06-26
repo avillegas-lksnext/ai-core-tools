@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.orm import Session
+from langgraph.errors import GraphRecursionError
 
 from services.agent_registry_service import AgentRegistryService
 from schemas.runtime_llm_config_schemas import RuntimeLLMConfig
@@ -1054,7 +1055,12 @@ class AgentExecutionService:
         try:
             # Create the agent chain with all tools and capabilities
             agent_chain, mcp_client = await create_agent(
-                fresh_agent, search_params, session_id_for_cache, user_context, working_dir
+                fresh_agent, 
+                search_params, 
+                session_id_for_cache, 
+                user_context, 
+                working_dir,
+                runtime_llm_config,
             )
 
             # Prepare configuration
@@ -1090,7 +1096,33 @@ class AgentExecutionService:
                     ls_settings.source,
                 )
 
-            result = await agent_chain.ainvoke({"messages": [message_payload]}, config=config)
+            max_iters = None
+            if runtime_llm_config and runtime_llm_config.agent_limits:
+                max_iters = runtime_llm_config.agent_limits.get("max_iterations")
+
+            input_state = {"messages": [message_payload]}
+            if isinstance(max_iters, int) and max_iters > 0:
+                # One tool round requires model->tools->model ~= 3 state steps.
+                # This allows one round for FAST and blocks chaining.
+                input_state["remaining_steps"] = 1
+
+            logger.info(
+                "AGENT INPUT STATE: %s",
+                input_state,
+            )
+
+            try:
+                result = await agent_chain.ainvoke(input_state, config=config)
+            except GraphRecursionError as gre:
+                logger.warning(
+                    "Agent %s reached recursion/tool limit; returning graceful fallback. Error: %s",
+                    fresh_agent.agent_id,
+                    str(gre),
+                )
+                return (
+                    "I reached the operational limit while solving this request. "
+                    "Here is the best result I could produce so far."
+                )
 
             # LangChain v1: structured output is in 'structured_response' key
             # when create_agent is called with response_format=pydantic_model
