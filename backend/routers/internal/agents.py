@@ -2,7 +2,6 @@ import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse
-from services.execution_profile_service import ExecutionProfileService
 from models.ai_service import AIService
 from schemas.agent_config_version_schemas import AgentConfigHistoryResponse, AgentConfigVersionRead, ConfigVersionComparisonResponse, RestoreConfigResponse
 from services.agent_config_snapshot_service import AgentConfigSnapshotService
@@ -635,22 +634,6 @@ async def create_or_update_agent(
     """
     Create a new agent or update an existing one.
     """
-    # App access validation would be implemented here
-    if agent_data.service_id:
-        ai_service = db.query(AIService).filter_by(service_id=agent_data.service_id).first()
-        if ai_service:
-            profile_service = ExecutionProfileService()
-            is_valid, warning = profile_service.validate_profile_for_agent(
-                agent_data.execution_profile_default or "balanced",
-                ai_service,
-                strict=True,
-            )
-            if not is_valid:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=warning or "Profile not compatible with this agent's LLM",
-                )
-    
     # Prepare agent data
     agent_dict = {
         'agent_id': agent_id,
@@ -812,94 +795,6 @@ async def update_agent_prompt(
     db.commit()  # Commit after snapshot creation to ensure version is saved
     
     return {"message": f"{prompt_data.type.capitalize()} prompt updated successfully"}
-
-
-@agents_router.patch(
-    "/{agent_id}/execution-profile-default",
-    summary="Update agent execution profile default",
-    tags=["Agents", "Execution Profiles"],
-    response_model=dict,
-)
-async def update_agent_execution_profile_default(
-    app_id: int,
-    agent_id: int,
-    data: Annotated[dict, Body()],  # {"execution_profile_default": "deep"}
-    auth_context: Annotated[AuthContext, Depends(get_current_user_oauth)],
-    role: Annotated[AppRole, Depends(require_min_role("editor"))],
-    db: Annotated[Session, Depends(get_db)],
-    agent_service: Annotated[AgentService, Depends(get_agent_service)],
-):
-    """
-    Update the default execution profile for an agent.
-    
-    Body:
-        - execution_profile_default: One of 'fast', 'balanced', 'deep', 'max'
-    
-    Returns validation result with optional warning if profile may not be fully supported.
-    """
-    from services.execution_profile_service import ExecutionProfileService
-    
-    profile_name = data.get("execution_profile_default", "").lower()
-    
-    # Validate profile name
-    valid = ['fast', 'balanced', 'deep', 'max']
-    if profile_name not in valid:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid profile. Must be one of: {', '.join(valid)}"
-        )
-    
-    # Get agent and validate it belongs to this app
-    agent = _get_agent_or_404(db, agent_id, app_id)
-    
-    # Check if profile is compatible with LLM (lenient mode)
-    profile_service = ExecutionProfileService()
-    if agent.service_id:
-        ai_service = db.query(AIService).filter_by(service_id=agent.service_id).first()
-        if ai_service:
-            is_valid, warning = profile_service.validate_profile_for_agent(
-                profile_name, 
-                ai_service,
-                strict=True
-            )
-            if not is_valid:
-                raise HTTPException(
-                    status_code=400,
-                    detail=warning or "Profile not compatible with this agent's LLM"
-                )
-    
-    # Update agent
-    try:
-        agent.execution_profile_default = profile_name
-        db.commit()
-        
-        warning = None
-        if agent.service_id:
-            ai_service = db.query(AIService).filter_by(service_id=agent.service_id).first()
-            if ai_service:
-                _, warning = profile_service.validate_profile_for_agent(
-                    profile_name, 
-                    ai_service,
-                    strict=True
-                )
-        
-        logger.info(
-            f"Updated execution profile default for agent {agent_id} "
-            f"to '{profile_name}' by user {auth_context.identity.id}"
-        )
-        
-        return {
-            "success": True,
-            "execution_profile_default": profile_name,
-            "warning": warning
-        }
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Failed to update execution profile default: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to update execution profile default"
-        )
 
 
 # ==================== PLAYGROUND & ANALYTICS ====================

@@ -268,7 +268,10 @@ class AgentExecutionService:
             pre_existing_files = set(os.listdir(working_dir))
         
         profile_service = ExecutionProfileService()
-        resolved_profile = profile_service.resolve_profile(execution_profile)
+
+        # Fall back to agent's default if no profile passed
+        profile_to_use = execution_profile or "balanced"
+        resolved_profile = profile_service.resolve_profile(profile_to_use)
 
         resolver = ExecutionResolverService()
         execution_config = resolver.resolve(resolved_profile)

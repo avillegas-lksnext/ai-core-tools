@@ -4,13 +4,17 @@
 MODEL_CAPABILITIES = {
 
     "openai": {
-        
         "gpt-5.4": {
             "supports_reasoning": False,
             "supports_reasoning_effort": False,
         },
 
         "gpt-5": {
+            "supports_reasoning": True,
+            "supports_reasoning_effort": True,
+        },
+
+        "o1": {
             "supports_reasoning": True,
             "supports_reasoning_effort": True,
         },
@@ -27,8 +31,12 @@ MODEL_CAPABILITIES = {
     },
 
     "azure": {
-
         "gpt-5": {
+            "supports_reasoning": True,
+            "supports_reasoning_effort": True,
+        },
+
+        "o1": {
             "supports_reasoning": True,
             "supports_reasoning_effort": True,
         },
@@ -44,8 +52,15 @@ MODEL_CAPABILITIES = {
         },
     },
 
-    "custom": {
+    "anthropic": {},
 
+    "google": {},
+
+    "googlecloud": {},
+
+    "mistralai": {},
+
+    "custom": {
         "deepseek-r1": {
             "supports_reasoning": True,
         },
