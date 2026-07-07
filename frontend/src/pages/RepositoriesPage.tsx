@@ -1,0 +1,259 @@
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { AlertTriangle, FolderOpen, Gamepad2, Pencil, Trash2 } from 'lucide-react';
+import { apiService } from '../services/api';
+import ActionDropdown from '../components/ui/ActionDropdown';
+import Table from '../components/ui/Table';
+import { useAppRole } from '../hooks/useAppRole';
+import { AppRole } from '../types/roles';
+import ReadOnlyBanner from '../components/ui/ReadOnlyBanner';
+import { useConfirm } from '../contexts/ConfirmContext';
+import { useApiMutation } from '../hooks/useApiMutation';
+import { MESSAGES, errorMessage } from '../constants/messages';
+
+interface Repository {
+  repository_id: number;
+  name: string;
+  created_at: string;
+  resource_count: number;
+}
+
+const RepositoriesPage: React.FC = () => {
+  const { appId } = useParams<{ appId: string }>();
+  const { hasMinRole, userRole } = useAppRole(appId);
+  const canEdit = hasMinRole(AppRole.EDITOR);
+  const confirm = useConfirm();
+  const mutate = useApiMutation();
+
+  const navigate = useNavigate();
+  const [repositories, setRepositories] = useState<Repository[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (appId) {
+      loadRepositories();
+    }
+  }, [appId]);
+
+  const loadRepositories = async () => {
+    try {
+      setLoading(true);
+      const data = await apiService.getRepositories(Number.parseInt(appId!));
+      setRepositories(data);
+      setError(null);
+    } catch (err) {
+      console.error('Error loading repositories:', err);
+      setError('Failed to load repositories');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateRepository = () => {
+    navigate(`/apps/${appId}/repositories/0`);
+  };
+
+  const handleEditRepository = (repositoryId: number) => {
+    navigate(`/apps/${appId}/repositories/${repositoryId}`);
+  };
+
+  const handleManageResources = (repositoryId: number) => {
+    navigate(`/apps/${appId}/repositories/${repositoryId}/detail`);
+  };
+
+  const handleDeleteRepository = async (repository: Repository) => {
+    const ok = await confirm({
+      title: MESSAGES.CONFIRM_DELETE_TITLE('repository'),
+      message: `Are you sure you want to delete "${repository.name}"? This action cannot be undone and will remove all associated documents.`,
+      variant: 'danger',
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+
+    const result = await mutate(
+      () => apiService.deleteRepository(Number.parseInt(appId!), repository.repository_id),
+      {
+        loading: MESSAGES.DELETING('repository'),
+        success: MESSAGES.DELETED('repository'),
+        error: (err) => errorMessage(err, MESSAGES.DELETE_FAILED('repository')),
+      },
+    );
+    if (result === undefined) return;
+
+    setRepositories(repositories.filter((r) => r.repository_id !== repository.repository_id));
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString();
+  };
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        {/* Page Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Repositories</h1>
+            <p className="text-gray-600">Manage your document repositories</p>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600"></div>
+          <span className="ml-2">Loading repositories...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        {/* Page Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Repositories</h1>
+            <p className="text-gray-600">Manage your document repositories</p>
+          </div>
+        </div>
+
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="flex">
+            <AlertTriangle className="w-5 h-5 text-red-400 mr-3 shrink-0" />
+            <div>
+              <h3 className="text-sm font-medium text-red-800">Error Loading Repositories</h3>
+              <p className="text-sm text-red-600 mt-1">{error}</p>
+              <button 
+                onClick={() => loadRepositories()}
+                className="mt-2 text-sm text-red-800 hover:text-red-900 underline"
+              >
+                Try again
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Page Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Repositories</h1>
+          <p className="text-gray-600">Manage your document repositories</p>
+        </div>
+        {canEdit && (
+          <button
+            onClick={handleCreateRepository}
+            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center"
+          >
+            <span className="mr-2">+</span>
+            {' '}
+            Create Repository
+          </button>
+        )}
+      </div>
+
+      {!canEdit && <ReadOnlyBanner userRole={userRole} minRole={AppRole.EDITOR} />}
+
+      {/* Repositories List */}
+      <Table
+        data={repositories}
+        keyExtractor={(repository) => repository.repository_id.toString()}
+        columns={[
+          {
+            header: 'Name',
+            render: (repository) => (
+              <button 
+                type="button"
+                className="flex items-center cursor-pointer hover:bg-gray-50 p-2 rounded-md transition-colors w-full text-left"
+                onClick={() => handleManageResources(repository.repository_id)}
+              >
+                <div className="flex-shrink-0 h-10 w-10">
+                  <div className="h-10 w-10 rounded-lg bg-green-100 flex items-center justify-center">
+                    <FolderOpen className="w-5 h-5 text-green-600" />
+                  </div>
+                </div>
+                <div className="ml-4">
+                  <div className="text-sm font-medium text-gray-900 hover:text-blue-600 transition-colors">
+                    {repository.name}
+                  </div>
+                </div>
+              </button>
+            )
+          },
+          {
+            header: 'Documents',
+            render: (repository) => `${repository.resource_count} documents`,
+            className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-900'
+          },
+          {
+            header: 'Created',
+            render: (repository) => formatDate(repository.created_at),
+            className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500'
+          },
+          {
+            header: 'Actions',
+            headerClassName: 'px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider',
+            className: 'px-6 py-4 whitespace-nowrap text-right text-sm font-medium relative',
+            render: (repository) => (
+              <ActionDropdown
+                actions={[
+                  ...(canEdit ? [
+                    {
+                      label: 'Manage Resources',
+                      onClick: () => navigate(`/apps/${appId}/repositories/${repository.repository_id}/detail`),
+                      icon: <FolderOpen className="w-4 h-4" />,
+                      variant: 'success' as const
+                    }
+                  ] : []),
+                  {
+                    label: 'Playground',
+                    onClick: () => navigate(`/apps/${appId}/repositories/${repository.repository_id}/playground`),
+                    icon: <Gamepad2 className="w-4 h-4" />,
+                    variant: 'warning'
+                  },
+                  ...(canEdit ? [
+                    {
+                      label: 'Edit',
+                      onClick: () => handleEditRepository(repository.repository_id),
+                      icon: <Pencil className="w-4 h-4" />,
+                      variant: 'primary' as const
+                    },
+                    {
+                      label: 'Delete',
+                      onClick: () => { void handleDeleteRepository(repository); },
+                      icon: <Trash2 className="w-4 h-4" />,
+                      variant: 'danger' as const
+                    }
+                  ] : [])
+                ]}
+                size="sm"
+              />
+            )
+          }
+        ]}
+        emptyIcon={<FolderOpen className="w-10 h-10 text-gray-300" />}
+        emptyMessage="No Repositories Yet"
+        emptySubMessage="Create your first repository to start organizing and searching documents."
+        loading={loading}
+      />
+
+      {!loading && repositories.length === 0 && canEdit && (
+        <div className="text-center py-6">
+          <button
+            onClick={handleCreateRepository}
+            className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg"
+          >
+            Create Your First Repository
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default RepositoriesPage; 

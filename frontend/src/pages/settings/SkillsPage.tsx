@@ -1,0 +1,339 @@
+import { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
+import { Target, Pencil, Trash2, Lightbulb } from 'lucide-react';
+import Modal from '../../components/ui/Modal';
+import SkillForm from '../../components/forms/SkillForm';
+import { apiService } from '../../services/api';
+import ActionDropdown from '../../components/ui/ActionDropdown';
+import { useSettingsCache } from '../../contexts/SettingsCacheContext';
+import { useAppRole } from '../../hooks/useAppRole';
+import ReadOnlyBanner from '../../components/ui/ReadOnlyBanner';
+import type { Skill } from '../../core/types';
+import Alert from '../../components/ui/Alert';
+import Table from '../../components/ui/Table';
+import { AppRole } from '../../types/roles';
+import { useConfirm } from '../../contexts/ConfirmContext';
+import { useApiMutation } from '../../hooks/useApiMutation';
+import { MESSAGES, errorMessage } from '../../constants/messages';
+
+function SkillsPage() {
+  const { appId } = useParams();
+  const settingsCache = useSettingsCache();
+  const { hasMinRole, userRole } = useAppRole(appId);
+  const canEdit = hasMinRole(AppRole.ADMINISTRATOR);
+  const confirm = useConfirm();
+  const mutate = useApiMutation();
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingSkill, setEditingSkill] = useState<any>(null);
+
+  // Load skills from cache or API
+  useEffect(() => {
+    loadSkills();
+  }, [appId]);
+
+  async function loadSkills() {
+    if (!appId) return;
+
+    // Check if we have cached data first
+    const cachedData = settingsCache.getSkills(appId);
+    if (cachedData) {
+      setSkills(cachedData);
+      setLoading(false);
+      return;
+    }
+
+    // If no cache, load from API
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await apiService.getSkills(Number.parseInt(appId));
+      setSkills(response);
+      // Cache the response
+      settingsCache.setSkills(appId, response);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load skills');
+      console.error('Error loading skills:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function _forceReloadSkills() {
+    if (!appId) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await apiService.getSkills(Number.parseInt(appId));
+      setSkills(response);
+      // Cache the response
+      settingsCache.setSkills(appId, response);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load skills');
+      console.error('Error loading skills:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDelete(skillId: number) {
+    if (!appId) return;
+
+    const target = skills.find((s) => s.skill_id === skillId);
+    const ok = await confirm({
+      title: MESSAGES.CONFIRM_DELETE_TITLE('skill'),
+      message: target
+        ? `Are you sure you want to delete "${target.name}"? Agents using it will lose this specialization.`
+        : MESSAGES.CONFIRM_DELETE_MESSAGE('skill'),
+      variant: 'danger',
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+
+    const result = await mutate(
+      () => apiService.deleteSkill(Number.parseInt(appId), skillId),
+      {
+        loading: MESSAGES.DELETING('skill'),
+        success: MESSAGES.DELETED('skill'),
+        error: (err) => errorMessage(err, MESSAGES.DELETE_FAILED('skill')),
+      },
+    );
+    if (result === undefined) return;
+
+    const newSkills = skills.filter((s) => s.skill_id !== skillId);
+    setSkills(newSkills);
+    settingsCache.setSkills(appId, newSkills);
+  }
+
+  function handleCreateSkill() {
+    setEditingSkill(null);
+    setIsModalOpen(true);
+  }
+
+  async function handleEditSkill(skillId: number) {
+    if (!appId) return;
+
+    try {
+      const skill = await apiService.getSkill(Number.parseInt(appId), skillId);
+      setEditingSkill(skill);
+      setIsModalOpen(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load skill details');
+      console.error('Error loading skill:', err);
+    }
+  }
+
+  async function handleSaveSkill(data: any) {
+    if (!appId) return;
+
+    const isUpdate = Boolean(editingSkill && editingSkill.skill_id !== 0);
+
+    const result = await mutate<Skill>(
+      () =>
+        isUpdate
+          ? apiService.updateSkill(Number.parseInt(appId), editingSkill.skill_id, data)
+          : apiService.createSkill(Number.parseInt(appId), data),
+      {
+        loading: isUpdate ? MESSAGES.UPDATING('skill') : MESSAGES.CREATING('skill'),
+        success: isUpdate ? MESSAGES.UPDATED('skill') : MESSAGES.CREATED('skill'),
+        error: (err) => errorMessage(err, MESSAGES.SAVE_FAILED('skill')),
+      },
+    );
+    if (result === undefined) return;
+
+    setIsModalOpen(false);
+    setEditingSkill(null);
+
+    if (isUpdate) {
+      try {
+        await loadSkills();
+      } catch (err) {
+        console.error('Refetch after update failed:', err);
+      }
+    } else {
+      const updatedSkills = [...skills, result];
+      setSkills(updatedSkills);
+      settingsCache.setSkills(appId, updatedSkills);
+    }
+  }
+
+  function handleCloseModal() {
+    setIsModalOpen(false);
+    setEditingSkill(null);
+  }
+
+  if (loading) {
+    return (
+      <div className="p-6 text-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600 mx-auto"></div>
+        <p className="mt-2 text-gray-600">Loading skills...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6">
+        <Alert type="error" message={error} onDismiss={() => loadSkills()} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6">
+      {/* Header */}
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <h2 className="text-xl font-semibold text-gray-900">Skills</h2>
+          <p className="text-gray-600">Manage prompt-driven specializations for your agents</p>
+        </div>
+        {canEdit && (
+          <button
+            onClick={handleCreateSkill}
+            className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg flex items-center"
+          >
+            <span className="mr-2">+</span>
+            {' '}Add Skill
+          </button>
+        )}
+      </div>
+
+      {/* Read-only banner for non-admins */}
+      {!canEdit && <ReadOnlyBanner userRole={userRole} minRole={AppRole.ADMINISTRATOR} />}
+
+      {/* Skills Table */}
+      <Table
+        data={skills}
+        keyExtractor={(skill) => skill.skill_id.toString()}
+        columns={[
+          {
+            header: 'Name',
+            render: (skill) => (
+              <div className="flex items-center">
+                <Target className="w-5 h-5 text-purple-400 mr-3 shrink-0" />
+                {canEdit ? (
+                  <button
+                    type="button"
+                    className="text-sm font-medium text-gray-900 hover:text-blue-600 transition-colors text-left"
+                    onClick={() => void handleEditSkill(skill.skill_id)}
+                  >
+                    {skill.name}
+                  </button>
+                ) : (
+                  <span className="text-sm font-medium text-gray-900">
+                    {skill.name}
+                  </span>
+                )}
+              </div>
+            )
+          },
+          {
+            header: 'Description',
+            render: (skill) => (
+              <div className="text-sm text-gray-600 max-w-xs truncate">
+                {skill.description || <span className="text-gray-400 italic">No description</span>}
+              </div>
+            ),
+            className: 'px-6 py-4'
+          },
+          {
+            header: 'Created',
+            render: (skill) => skill.created_at ? new Date(skill.created_at).toLocaleDateString() : 'N/A',
+            className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500'
+          },
+          {
+            header: 'Actions',
+            className: 'relative',
+            render: (skill) => (
+              canEdit ? (
+                <ActionDropdown
+                  actions={[
+                    {
+                      label: 'Edit',
+                      onClick: () => { void handleEditSkill(skill.skill_id); },
+                      icon: <Pencil className="w-4 h-4" />,
+                      variant: 'primary'
+                    },
+                    {
+                      label: 'Delete',
+                      onClick: () => { void handleDelete(skill.skill_id); },
+                      icon: <Trash2 className="w-4 h-4" />,
+                      variant: 'danger'
+                    }
+                  ]}
+                  size="sm"
+                />
+              ) : (
+                <span className="text-gray-400 text-sm">View only</span>
+              )
+            )
+          }
+        ]}
+        emptyIcon={<Target className="w-10 h-10 text-gray-300" />}
+        emptyMessage="No Skills"
+        emptySubMessage="Add your first skill to create specialized behaviors for your agents."
+        loading={loading}
+      />
+
+      {skills.length === 0 && canEdit && (
+        <div className="text-center py-6">
+          <button
+            onClick={handleCreateSkill}
+            className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-lg"
+          >
+            Add First Skill
+          </button>
+        </div>
+      )}
+
+      {/* Info Box */}
+      <div className="mt-6 bg-purple-50 border border-purple-200 rounded-lg p-4">
+        <div className="flex">
+          <div className="flex-shrink-0">
+            <Lightbulb className="w-5 h-5 text-purple-400" />
+          </div>
+          <div className="ml-3">
+            <h3 className="text-sm font-medium text-purple-800">
+              About Skills
+            </h3>
+            <div className="mt-2 text-sm text-purple-700">
+              <p>
+                Skills are prompt-driven specializations that agents can dynamically load on-demand.
+                When an agent has skills assigned, it gains a <code className="bg-purple-100 px-1 rounded">load_skill</code> tool
+                that allows it to activate specialized behavior when needed.
+              </p>
+              <div className="mt-2">
+                <strong>Example Skills:</strong>
+                <ul className="list-disc list-inside mt-1 space-y-1">
+                  <li>Code Review Guidelines - Best practices for reviewing code</li>
+                  <li>Technical Writing - Formatting and style for documentation</li>
+                  <li>Data Analysis - Steps for analyzing datasets</li>
+                  <li>Customer Support - Tone and process for handling inquiries</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Create/Edit Modal */}
+      <Modal
+        isOpen={isModalOpen}
+        onClose={handleCloseModal}
+        title={editingSkill ? 'Edit Skill' : 'Create New Skill'}
+        size="large"
+      >
+        <SkillForm
+          skill={editingSkill}
+          onSubmit={handleSaveSkill}
+          onCancel={handleCloseModal}
+        />
+      </Modal>
+    </div>
+  );
+}
+
+export default SkillsPage;

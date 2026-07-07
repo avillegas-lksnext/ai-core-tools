@@ -1,0 +1,236 @@
+import { useState, useEffect, useCallback } from 'react';
+import { Users, AppWindow, Bot, KeyRound } from 'lucide-react';
+import { adminService } from '../../services/admin';
+import type { SystemStats } from '../../services/admin';
+import { LoadingState } from '../../components/ui/LoadingState';
+import { ErrorState } from '../../components/ui/ErrorState';
+import { errorMessage } from '../../constants/messages';
+
+function StatsPage() {
+  const [stats, setStats] = useState<SystemStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadStats = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await adminService.getSystemStats();
+      setStats(data);
+    } catch (err) {
+      setError(errorMessage(err, 'Unable to load system statistics'));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  if (loading) {
+    return <LoadingState message="Loading statistics..." />;
+  }
+
+  if (error || !stats) {
+    return <ErrorState error={error ?? 'Unable to load system statistics'} onRetry={loadStats} />;
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">System Statistics</h1>
+        <p className="text-gray-600">Overview of system usage and activity</p>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* Total Users */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center">
+            <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+              <Users className="w-6 h-6" />
+            </div>
+            <div className="ml-4">
+              <p className="text-sm font-medium text-gray-600">Total Users</p>
+              <p className="text-2xl font-bold text-gray-900">{stats.total_users}</p>
+              <p className="text-xs text-gray-500 mt-1">
+                {stats.active_users} active · {stats.inactive_users} inactive
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Total Apps */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center">
+            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+              <AppWindow className="w-6 h-6" />
+            </div>
+            <div className="ml-4">
+              <p className="text-sm font-medium text-gray-600">Total Apps</p>
+              <p className="text-2xl font-bold text-gray-900">{stats.total_apps}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Total Agents */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center">
+            <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
+              <Bot className="w-6 h-6" />
+            </div>
+            <div className="ml-4">
+              <p className="text-sm font-medium text-gray-600">Total Agents</p>
+              <p className="text-2xl font-bold text-gray-900">{stats.total_agents}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* API Keys */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center">
+            <div className="w-12 h-12 bg-yellow-100 rounded-lg flex items-center justify-center">
+              <KeyRound className="w-6 h-6" />
+            </div>
+            <div className="ml-4">
+              <p className="text-sm font-medium text-gray-600">API Keys</p>
+              <p className="text-2xl font-bold text-gray-900">{stats.total_api_keys}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Detailed Stats */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* User Status Breakdown */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">User Status</h3>
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Active Users</span>
+              <span className="text-sm font-medium text-green-600">{stats.active_users}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Inactive Users</span>
+              <span className="text-sm font-medium text-red-600">{stats.inactive_users}</span>
+            </div>
+            <div className="pt-2 border-t border-gray-200">
+              <div className="flex justify-between items-center">
+                <span className="text-sm font-medium text-gray-900">Total Users</span>
+                <span className="text-sm font-medium text-gray-900">{stats.total_users}</span>
+              </div>
+            </div>
+            <div className="pt-2">
+              <div className="flex justify-between items-center text-xs text-gray-500">
+                <span>Active Rate</span>
+                <span>{stats.total_users > 0 ? Math.round((stats.active_users / stats.total_users) * 100) : 0}%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* API Keys Breakdown */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">API Keys Status</h3>
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Active Keys</span>
+              <span className="text-sm font-medium text-green-600">{stats.active_api_keys}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Inactive Keys</span>
+              <span className="text-sm font-medium text-red-600">{stats.inactive_api_keys}</span>
+            </div>
+            <div className="pt-2 border-t border-gray-200">
+              <div className="flex justify-between items-center">
+                <span className="text-sm font-medium text-gray-900">Total</span>
+                <span className="text-sm font-medium text-gray-900">{stats.total_api_keys}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Additional Stats */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        {/* User Activity */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">User Activity</h3>
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Users with Apps</span>
+              <span className="text-sm font-medium text-blue-600">{stats.users_with_apps}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Recent Users (30 days)</span>
+              <span className="text-sm font-medium text-green-600">{stats.recent_users.length}</span>
+            </div>
+            <div className="pt-2 border-t border-gray-200">
+              <div className="flex justify-between items-center">
+                <span className="text-sm font-medium text-gray-900">Active Users</span>
+                <span className="text-sm font-medium text-gray-900">
+                  {Math.round((stats.users_with_apps / stats.total_users) * 100)}%
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Recent Users */}
+      <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h3 className="text-lg font-semibold text-gray-900">Recent Users</h3>
+          <p className="text-sm text-gray-600">Users who joined in the last 30 days</p>
+        </div>
+        
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  User
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Email
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Joined
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {stats.recent_users.map((user) => (
+                <tr key={user.user_id} className="hover:bg-gray-50">
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm font-medium text-gray-900">
+                      {user.name || 'No name'}
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {user.email}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {new Date(user.created_at).toLocaleDateString()}
+                  </td>
+                </tr>
+              ))}
+              {stats.recent_users.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="px-6 py-4 text-center text-sm text-gray-500">
+                    No recent users
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default StatsPage; 

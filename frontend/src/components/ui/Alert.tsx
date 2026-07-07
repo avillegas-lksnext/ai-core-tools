@@ -1,0 +1,90 @@
+
+import React, { type ReactNode } from 'react';
+import { CheckCircle2, AlertTriangle, Info } from 'lucide-react';
+
+interface AlertProps {
+  type: 'success' | 'error' | 'warning' | 'info';
+  title?: string;
+  message: string | ReactNode;
+  onDismiss?: () => void;
+  className?: string;
+}
+
+const alertStyles = {
+  success: {
+    container: 'bg-green-50 border-green-200',
+    iconColor: 'text-green-400',
+    titleColor: 'text-green-800',
+    messageColor: 'text-green-600',
+    buttonColor: 'text-green-600 hover:text-green-800',
+  },
+  error: {
+    container: 'bg-red-50 border-red-200',
+    iconColor: 'text-red-400',
+    titleColor: 'text-red-800',
+    messageColor: 'text-red-600',
+    buttonColor: 'text-red-600 hover:text-red-800',
+  },
+  warning: {
+    container: 'bg-yellow-50 border-yellow-200',
+    iconColor: 'text-yellow-400',
+    titleColor: 'text-yellow-800',
+    messageColor: 'text-yellow-600',
+    buttonColor: 'text-yellow-600 hover:text-yellow-800',
+  },
+  info: {
+    container: 'bg-blue-50 border-blue-200',
+    iconColor: 'text-blue-400',
+    titleColor: 'text-blue-800',
+    messageColor: 'text-blue-600',
+    buttonColor: 'text-blue-600 hover:text-blue-800',
+  },
+};
+
+const alertIcons = {
+  success: <CheckCircle2 className="w-5 h-5" />,
+  error: <AlertTriangle className="w-5 h-5" />,
+  warning: <AlertTriangle className="w-5 h-5" />,
+  info: <Info className="w-5 h-5" />,
+};
+
+const Alert: React.FC<AlertProps> = ({
+  type,
+  title,
+  message,
+  onDismiss,
+  className = ''
+}) => {
+  const styles = alertStyles[type];
+  const defaultTitle = type.charAt(0).toUpperCase() + type.slice(1);
+  const assertive = type === 'error' || type === 'warning';
+
+  return (
+    <div
+      className={`${styles.container} border rounded-lg p-4 ${className}`}
+      role={assertive ? 'alert' : 'status'}
+      aria-live={assertive ? 'assertive' : 'polite'}
+    >
+      <div className="flex">
+        <span className={`${styles.iconColor} mr-3 shrink-0`} aria-hidden="true">{alertIcons[type]}</span>
+        <div className="flex-1">
+          <h3 className={`text-sm font-medium ${styles.titleColor}`}>
+            {title || defaultTitle}
+          </h3>
+          <p className={`text-sm ${styles.messageColor} mt-1`}>{message}</p>
+          {onDismiss && (
+            <button
+              type="button"
+              onClick={onDismiss}
+              className={`mt-2 text-sm ${styles.buttonColor} underline`}
+            >
+              Dismiss
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Alert;
