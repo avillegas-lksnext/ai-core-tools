@@ -23,7 +23,7 @@ class ConfigAuditLog(Base):
     app_id = Column(Integer, ForeignKey("App.app_id", ondelete="CASCADE"), nullable=False, index=True)
     
     # Change tracking
-    change_type = Column(SQLEnum(ChangeType), nullable=False)
+    change_type = Column(SQLEnum(ChangeType, name="changetype", values_callable=lambda enum: [e.value for e in enum]), nullable=False)
     changed_by_user_id = Column(Integer, ForeignKey("User.user_id", ondelete="SET NULL"), nullable=True)
     changed_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     

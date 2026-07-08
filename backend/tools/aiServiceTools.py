@@ -119,10 +119,9 @@ class VoidRetriever(BaseRetriever):
 
 def _build_openai_llm(ai_service, temperature, runtime_llm_config=None):
     base_url = ai_service.endpoint if ai_service.endpoint else None
-    runtime_kwargs = _build_runtime_kwargs(runtime_llm_config)
+    runtime_kwargs = _build_runtime_kwargs(runtime_llm_config, temperature)
     return ChatOpenAI(
         model=ai_service.description,
-        temperature=temperature,
         api_key=ai_service.api_key,
         base_url=base_url,
         **runtime_kwargs,
@@ -160,10 +159,9 @@ def _build_openrouter_llm(ai_service, temperature):
 
 
 def _build_anthropic_llm(ai_service, temperature, runtime_llm_config=None):
-    runtime_kwargs = _build_runtime_kwargs(runtime_llm_config)
+    runtime_kwargs = _build_runtime_kwargs(runtime_llm_config, temperature)
     return ChatAnthropic(
         model=ai_service.description,
-        temperature=temperature,
         api_key=ai_service.api_key,
         **runtime_kwargs,
     )
@@ -173,10 +171,9 @@ def _build_mistral_llm(ai_service, temperature, is_vision, runtime_llm_config=No
     if is_vision:
         mistral_client = Mistral(api_key=ai_service.api_key)
         return MistralWrapper(client=mistral_client, model_name=ai_service.description)
-    runtime_kwargs = _build_runtime_kwargs(runtime_llm_config)
+    runtime_kwargs = _build_runtime_kwargs(runtime_llm_config, temperature)
     return ChatMistralAI(
         model=ai_service.description,
-        temperature=temperature,
         api_key=ai_service.api_key,
         **runtime_kwargs,
     )
@@ -227,10 +224,9 @@ def _build_custom_llm(ai_service, temperature, runtime_llm_config=None):
 
 
 def _build_azure_llm(ai_service, temperature, runtime_llm_config=None):
-    runtime_kwargs = _build_runtime_kwargs(runtime_llm_config)
+    runtime_kwargs = _build_runtime_kwargs(runtime_llm_config, temperature)
     return AzureAIChatCompletionsModel(
         model=ai_service.description,
-        temperature=temperature,
         credential=ai_service.api_key,
         endpoint=ai_service.endpoint,
         api_version=ai_service.api_version,
@@ -275,7 +271,6 @@ def _resolve_google_client_options(endpoint_raw, service_name, runtime_llm_confi
 def _build_google_llm(ai_service, temperature, runtime_llm_config=None):
     google_kwargs = {
         "model": ai_service.description,
-        "temperature": temperature,
         "api_key": ai_service.api_key,
     }
 
@@ -287,7 +282,7 @@ def _build_google_llm(ai_service, temperature, runtime_llm_config=None):
         if client_options:
             google_kwargs["client_options"] = client_options
     
-    google_kwargs.update(_build_runtime_kwargs(runtime_llm_config))
+    google_kwargs.update(_build_runtime_kwargs(runtime_llm_config, temperature))
 
     logger.info(
         "Creating Gemini model=%s kwargs=%s",
@@ -327,101 +322,51 @@ def _build_google_cloud_llm(ai_service, temperature, runtime_llm_config=None):
         "vertexai": True,
     }
 
-    google_kwargs.update(_build_runtime_kwargs(runtime_llm_config))
+    google_kwargs.update(_build_runtime_kwargs(runtime_llm_config, temperature))
 
     return ChatGoogleGenerativeAI(**google_kwargs)
 
+def _build_runtime_kwargs(runtime_llm_config, temperature=None):
+    kwargs = {}
 
-def _build_openai_runtime_kwargs(runtime_llm_config):
-    if not runtime_llm_config or not runtime_llm_config.supports_reasoning_effort:
-        return {}
-
-    effort_map = {
-        0: None,
-        1: "low",
-        2: "medium",
-        3: "high",
-    }
-
-    result = { "reasoning_effort": effort_map[runtime_llm_config.reasoning_level] }
-
-    logger.info(
-        "OpenAI runtime kwargs: %s",
-        result
-    )
-
-    return result
-
-def _build_anthropic_runtime_kwargs(runtime_llm_config):
-    if not runtime_llm_config or not runtime_llm_config.supports_thinking_budget:
-        return {}
+    if temperature is not None:
+        if runtime_llm_config and runtime_llm_config.supports_temperature:
+            kwargs["temperature"] = temperature
+        else:
+            kwargs["temperature"] = 1
     
-    budget_map = {
-        0: 1024,
-        1: 4096,
-        2: 8192,
-        3: 16384,
-    }
-
-    return {
-        "thinking_budget": budget_map[runtime_llm_config.reasoning_level]
-    }
-
-def _build_google_runtime_kwargs(runtime_llm_config):
-    if not runtime_llm_config or not runtime_llm_config.supports_thinking_budget:
-        return {}
-
-    budget_map = {
-        0: 1024,
-        1: 4096,
-        2: 8192,
-        3: 16384,
-    }
-
-    result = {
-        "thinking_budget": budget_map[runtime_llm_config.reasoning_level]
-    }
-
     logger.info(
-        "Google runtime kwargs: %s",
-        result
+        "Building runtime kwargs: temperature=%s runtime_llm_config=%s",
+        temperature,
+        runtime_llm_config,
     )
 
-    return result
-
-def _build_mistral_runtime_kwargs(runtime_llm_config):
-    #Temporal
-    return {}
-
-def _build_custom_runtime_kwargs(runtime_llm_config):
-    #Temporal
-    return {}
-
-def _build_runtime_kwargs(runtime_llm_config):
     if not runtime_llm_config:
-        return {}
+        return kwargs
 
-    provider = (runtime_llm_config.provider or "").lower()
+    if not runtime_llm_config.supports_reasoning:
+        logger.info("RUNTIME CONFIG: MODEL DOES NOT SUPPORT REASONING; SKIPPING REASONING PARAMETERS")
 
-    if provider == "openai":
-        return _build_openai_runtime_kwargs(runtime_llm_config)
+        return kwargs
 
-    if provider == "azure":
-        return _build_openai_runtime_kwargs(runtime_llm_config)
+    parameter = runtime_llm_config.reasoning_parameter
+    if not parameter:
+        return kwargs
 
-    if provider == "google":
-        return _build_google_runtime_kwargs(runtime_llm_config)
+    profile_map = runtime_llm_config.reasoning_profile_map
+    if not profile_map:
+        return kwargs
 
-    if provider == "googlecloud":
-        return _build_google_runtime_kwargs(runtime_llm_config)
+    value = profile_map.get(runtime_llm_config.reasoning_level)
+    if value is None:
+        return kwargs
+    
+    kwargs[parameter] = value
 
-    if provider == "anthropic":
-        return _build_anthropic_runtime_kwargs(runtime_llm_config)
+    logger.info(
+        "ADDING REASONING PARAMETER TO RUNTIME KWARGS: %s=%s",
+        parameter,
+        value,
+    )
 
-    if provider == "mistralai":
-        return _build_mistral_runtime_kwargs(runtime_llm_config)
-
-    if provider == "custom":
-        return _build_custom_runtime_kwargs(runtime_llm_config)
-
-    return {}
+    return kwargs
