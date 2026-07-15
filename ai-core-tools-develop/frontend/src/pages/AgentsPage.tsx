@@ -1,0 +1,550 @@
+import { useState, useEffect, useCallback } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { toast } from 'sonner';
+import { Bot, FileText, ArrowUp, ArrowDownToLine, Gamepad2, AlertTriangle, Pencil, Trash2 } from 'lucide-react';
+import { apiService } from '../services/api';
+import ActionDropdown from '../components/ui/ActionDropdown';
+import Alert from '../components/ui/Alert';
+import Table from '../components/ui/Table';
+import { useAppRole } from '../hooks/useAppRole';
+import { AppRole } from '../types/roles';
+import ReadOnlyBanner from '../components/ui/ReadOnlyBanner';
+import AgentImportStepper from '../components/import/AgentImportStepper';
+import { useConfirm } from '../contexts/ConfirmContext';
+import { useApiMutation } from '../hooks/useApiMutation';
+import { MESSAGES, errorMessage } from '../constants/messages';
+import type { AgentMCPUsage } from '../core/types';
+
+// Define the Agent type
+interface Agent {
+  agent_id: number;
+  name: string;
+  type: string;
+  is_tool: boolean;
+  created_at: string;
+  request_count: number;
+  description?: string;
+  service_id?: number;
+  ai_service?: {
+    name: string;
+    model_name: string;
+    provider: string;
+  };
+}
+
+// Define the App type
+interface App {
+  app_id: number;
+  name: string;
+}
+
+function AgentsPage() {
+  const { appId } = useParams();
+  const navigate = useNavigate();
+  const { hasMinRole, userRole } = useAppRole(appId);
+  const canEdit = hasMinRole(AppRole.EDITOR);
+  const confirm = useConfirm();
+  const mutate = useApiMutation();
+
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [app, setApp] = useState<App | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [agentToExport, setAgentToExport] = useState<Agent | null>(null);
+  const [exportOptions, setExportOptions] = useState({
+    includeAIService: true,
+    includeSilo: true,
+    includeOutputParser: true,
+    includeMCPConfigs: true,
+    includeAgentTools: true,
+  });
+
+  const loadData = useCallback(async () => {
+    if (!appId) return;
+    
+    try {
+      setLoading(true);
+      setError(null);
+      
+      const [agentsResponse, appResponse] = await Promise.all([
+        apiService.getAgents(Number.parseInt(appId)),
+        apiService.getApp(Number.parseInt(appId))
+      ]);
+      
+      setAgents(agentsResponse);
+      setApp(appResponse);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load data');
+      console.error('Error loading data:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [appId]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  const handleCreateAgent = () => {
+    navigate(`/apps/${appId}/agents/0`);
+  };
+
+  const handleEditAgent = (agentId: number) => {
+    navigate(`/apps/${appId}/agents/${agentId}`);
+  };
+
+  const handlePlayground = (agentId: number) => {
+    navigate(`/apps/${appId}/agents/${agentId}/playground`);
+  };
+
+  const handleDeleteAgent = async (agent: Agent) => {
+    if (!appId) return;
+
+    let mcpUsage: AgentMCPUsage | null = null;
+    if (agent.is_tool) {
+      try {
+        mcpUsage = await apiService.getAgentMCPUsage(Number.parseInt(appId), agent.agent_id);
+      } catch (err) {
+        console.error('Error loading MCP usage:', err);
+      }
+    }
+
+    const message = (
+      <div className="space-y-3">
+        <p>Are you sure you want to delete &quot;{agent.name}&quot;? This action cannot be undone.</p>
+        {mcpUsage && mcpUsage.mcp_servers.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+            <p className="font-medium text-amber-900 text-sm">
+              This agent is used in {mcpUsage.mcp_servers.length} MCP server
+              {mcpUsage.mcp_servers.length === 1 ? '' : 's'}:
+            </p>
+            <ul className="mt-1 text-amber-800 text-sm list-disc list-inside">
+              {mcpUsage.mcp_servers.map((s) => (
+                <li key={s.server_id}>{s.server_name}</li>
+              ))}
+            </ul>
+            <p className="mt-2 text-amber-700 text-sm">
+              Deleting this agent will make it unavailable in those MCP servers.
+            </p>
+          </div>
+        )}
+      </div>
+    );
+
+    const ok = await confirm({
+      title: MESSAGES.CONFIRM_DELETE_TITLE('agent'),
+      message,
+      variant: 'danger',
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+
+    const result = await mutate(
+      () => apiService.deleteAgent(Number.parseInt(appId), agent.agent_id),
+      {
+        loading: MESSAGES.DELETING('agent'),
+        success: MESSAGES.DELETED('agent'),
+        error: (err) => errorMessage(err, MESSAGES.DELETE_FAILED('agent')),
+      },
+    );
+    if (result === undefined) return;
+
+    setAgents(agents.filter((a) => a.agent_id !== agent.agent_id));
+  };
+
+  const handleExportClick = (agent: Agent) => {
+    setAgentToExport(agent);
+    setShowExportDialog(true);
+  };
+
+  const handleExport = async () => {
+    if (!agentToExport || !appId) return;
+
+    try {
+      const blob = await apiService.exportAgent(
+        Number.parseInt(appId),
+        agentToExport.agent_id,
+        exportOptions.includeAIService,
+        exportOptions.includeSilo,
+        exportOptions.includeOutputParser,
+        exportOptions.includeMCPConfigs,
+        exportOptions.includeAgentTools
+      );
+      
+      // Generate filename
+      const timestamp = new Date().toISOString().split('T')[0];
+      const sanitizedName = agentToExport.name.replaceAll(/[^a-z0-9]/gi, '_').toLowerCase();
+      const filename = `agent-${sanitizedName}-${timestamp}.json`;
+      
+      // Download
+      const url = globalThis.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      globalThis.URL.revokeObjectURL(url);
+      a.remove();
+
+      setShowExportDialog(false);
+      setAgentToExport(null);
+      toast.warning('Agent exported successfully. Note: Conversation history excluded.', {
+        duration: 7000,
+      });
+    } catch (err) {
+      toast.error(errorMessage(err, MESSAGES.EXPORT_FAILED('agent')));
+      console.error('Error exporting agent:', err);
+    }
+  };
+
+  const handleImportComplete = () => {
+    setShowImportModal(false);
+    toast.success(MESSAGES.IMPORTED('agent'));
+    void loadData();
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString();
+  };
+
+  const getAgentTypeIcon = (type: string) => {
+    switch (type) {
+      case 'ocr_agent':
+        return <FileText className="w-4 h-4" />;
+      case 'agent':
+      default:
+        return <Bot className="w-4 h-4" />;
+    }
+  };
+
+  const getAgentTypeLabel = (type: string) => {
+    switch (type) {
+      case 'ocr_agent':
+        return 'OCR Agent';
+      case 'agent':
+      default:
+        return 'AI Agent';
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        {/* Page Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Agents</h1>
+            <p className="text-gray-600">Manage your AI agents for app {app?.name || appId}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <span className="ml-2">Loading agents...</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Page Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Agents</h1>
+          <p className="text-gray-600">Manage your AI agents for app {app?.name || appId}</p>
+        </div>
+        <div className="flex items-center space-x-3">
+          {hasMinRole(AppRole.ADMINISTRATOR) && (
+            <button
+              onClick={() => setShowImportModal(true)}
+              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center"
+            >
+              <ArrowUp className="w-4 h-4 mr-2" aria-hidden="true" />
+              <span>Import Agent</span>
+            </button>
+          )}
+          {canEdit && (
+            <button 
+              onClick={handleCreateAgent}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center"
+            >
+              <span className="mr-2">+</span>
+              {' '}Create Agent
+            </button>
+          )}
+        </div>
+      </div>
+
+      {!canEdit && <ReadOnlyBanner userRole={userRole} minRole={AppRole.EDITOR} />}
+
+      {/* Error Message */}
+      {error && <Alert type="error" message={error} onDismiss={() => setError(null)} />}
+
+      <Table
+        data={agents}
+        keyExtractor={(agent) => agent.agent_id.toString()}
+        columns={[
+          {
+            header: 'Agent',
+            render: (agent) => (
+              <div className="flex items-center">
+                <div className="flex-shrink-0 h-10 w-10">
+                  <div className="h-10 w-10 rounded-lg bg-blue-100 flex items-center justify-center">
+                    <span className="text-blue-600 text-lg">{getAgentTypeIcon(agent.type)}</span>
+                  </div>
+                </div>
+                <div className="ml-4">
+                  <div className="text-sm font-medium text-gray-900">
+                    {canEdit ? (
+                      <Link 
+                        to={`/apps/${appId}/agents/${agent.agent_id}`} 
+                        className="text-sm font-medium text-gray-900 hover:text-blue-600 transition-colors"
+                      >
+                        {agent.name}
+                      </Link>
+                    ) : (
+                      <span className="text-sm font-medium text-gray-900">
+                        {agent.name}
+                      </span>
+                    )}
+                  </div>
+                  {agent.is_tool && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                      Tool 
+                    </span>
+                  )}
+                </div>
+              </div>
+            )
+          },
+          {
+            header: 'Description',
+            render: (agent) => (
+              <div className="text-sm text-gray-900 max-w-xs">
+                {agent.description ? (
+                  <div className="truncate" title={agent.description}>
+                    {agent.description}
+                  </div>
+                ) : (
+                  <span className="text-gray-400 italic">No description</span>
+                )}
+              </div>
+            ),
+            className: 'px-6 py-4'
+          },
+          {
+            header: 'Type',
+            render: (agent) => (
+              <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-800">
+                {getAgentTypeLabel(agent.type)}
+              </span>
+            )
+          },
+          {
+            header: 'AI Service',
+            render: (agent) => (
+              agent.ai_service ? (
+                <div className="text-sm">
+                  <div className="font-medium text-gray-900">
+                    {agent.ai_service.name}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {agent.ai_service.model_name} • {agent.ai_service.provider}
+                  </div>
+                </div>
+              ) : (
+                <span className="text-gray-400 italic text-sm">No AI Service</span>
+              )
+            )
+          },
+          {
+            header: 'Status',
+            render: () => (
+              <span className="inline-flex items-center px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
+                <span className="w-2 h-2 bg-green-400 rounded-full mr-2" />
+                {' '}Active
+              </span>
+            )
+          },
+          {
+            header: 'Usage',
+            render: (agent) => (
+              <div className="text-sm text-gray-900">
+                <div className="flex items-center">
+                  <span className="font-medium">{agent.request_count}</span>
+                  <span className="text-gray-500 ml-1">requests</span>
+                </div>
+                {agent.request_count > 0 && (
+                  <div className="text-xs text-gray-500">
+                    Last used: {formatDate(agent.created_at)}
+                  </div>
+                )}
+              </div>
+            )
+          },
+          {
+            header: 'Created',
+            render: (agent) => formatDate(agent.created_at),
+            className: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500'
+          },
+          {
+            header: 'Actions',
+            headerClassName: 'px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider',
+            className: 'px-6 py-4 whitespace-nowrap text-right text-sm font-medium',
+            render: (agent) => (
+              <ActionDropdown
+                actions={[
+                  {
+                    label: 'Playground',
+                    onClick: () => handlePlayground(agent.agent_id),
+                    icon: <Gamepad2 className="w-4 h-4" />,
+                    variant: 'warning'
+                  },
+                  ...(canEdit ? [
+                    {
+                      label: 'Export',
+                      onClick: () => handleExportClick(agent),
+                      icon: <ArrowDownToLine className="w-4 h-4" />,
+                      variant: 'primary' as const
+                    },
+                    {
+                      label: 'Edit',
+                      onClick: () => handleEditAgent(agent.agent_id),
+                      icon: <Pencil className="w-4 h-4" />,
+                      variant: 'primary' as const
+                    },
+                    {
+                      label: 'Delete',
+                      onClick: () => { void handleDeleteAgent(agent); },
+                      icon: <Trash2 className="w-4 h-4" />,
+                      variant: 'danger' as const
+                    }
+                  ] : [])
+                ]}
+                size="sm"
+              />
+            )
+          }
+        ]}
+        emptyIcon={<Bot className="w-10 h-10 text-gray-300" />}
+        emptyMessage="No Agents Yet"
+        emptySubMessage="Create your first AI agent to get started with intelligent automation."
+        loading={loading}
+      />
+
+      {!loading && canEdit && agents.length === 0 && (
+        <div className="text-center py-6">
+          <button 
+            onClick={handleCreateAgent}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg"
+          >
+            Create Your First Agent
+          </button>
+        </div>
+      )}
+
+      {/* Export Dialog */}
+      {showExportDialog && agentToExport && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Export Agent</h3>
+            <p className="text-gray-600 mb-4">
+              Exporting "{agentToExport.name}". Select which components to bundle:
+            </p>
+
+            {/* Export Options */}
+            <div className="space-y-3 mb-4">
+              <label className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  checked={exportOptions.includeAIService}
+                  onChange={(e) => setExportOptions({...exportOptions, includeAIService: e.target.checked})}
+                  className="rounded border-gray-300"
+                />
+                <span className="text-sm text-gray-700">Include AI Service</span>
+              </label>
+              <label className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  checked={exportOptions.includeSilo}
+                  onChange={(e) => setExportOptions({...exportOptions, includeSilo: e.target.checked})}
+                  className="rounded border-gray-300"
+                />
+                <span className="text-sm text-gray-700">Include Silo (Knowledge Base)</span>
+              </label>
+              <label className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  checked={exportOptions.includeOutputParser}
+                  onChange={(e) => setExportOptions({...exportOptions, includeOutputParser: e.target.checked})}
+                  className="rounded border-gray-300"
+                />
+                <span className="text-sm text-gray-700">Include Output Parser</span>
+              </label>
+              <label className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  checked={exportOptions.includeMCPConfigs}
+                  onChange={(e) => setExportOptions({...exportOptions, includeMCPConfigs: e.target.checked})}
+                  className="rounded border-gray-300"
+                />
+                <span className="text-sm text-gray-700">Include MCP Configs</span>
+              </label>
+              <label className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  checked={exportOptions.includeAgentTools}
+                  onChange={(e) => setExportOptions({...exportOptions, includeAgentTools: e.target.checked})}
+                  className="rounded border-gray-300"
+                />
+                <span className="text-sm text-gray-700">Include Agent Tools</span>
+              </label>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+              <div className="flex items-start">
+                <AlertTriangle className="w-4 h-4 text-amber-500 mr-2 shrink-0" />
+                <p className="text-sm text-amber-800">
+                  Conversation history is NOT exported. Only configuration is included.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => {
+                  setShowExportDialog(false);
+                  setAgentToExport(null);
+                }}
+                className="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-800 py-2 px-4 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleExport}
+                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-lg"
+              >
+                Export
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import Stepper */}
+      {showImportModal && (
+        <AgentImportStepper
+          appId={Number.parseInt(appId!)}
+          isOpen={showImportModal}
+          onClose={() => setShowImportModal(false)}
+          onImportComplete={handleImportComplete}
+        />
+      )}
+    </div>
+  );
+}
+
+export default AgentsPage; 

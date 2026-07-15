@@ -1,0 +1,329 @@
+from sqlalchemy.orm import Session
+from models.ai_service import AIService, ProviderEnum
+from repositories.ai_service_repository import AIServiceRepository
+from schemas.ai_service_schemas import (
+    AIServiceListItemSchema,
+    AIServiceDetailSchema,
+    CreateUpdateAIServiceSchema,
+)
+from core.export_constants import PLACEHOLDER_API_KEY
+from utils.secret_utils import mask_api_key, is_masked_key
+from datetime import datetime
+from typing import List
+from tools.aiServiceTools import create_llm_from_service
+from utils.logger import get_logger
+import asyncio
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+from langchain_core.runnables import RunnableConfig
+
+logger = get_logger(__name__)
+
+class AIServiceService:
+
+    @staticmethod
+    def _to_list_item(service: "AIService", is_system: bool = False) -> AIServiceListItemSchema:
+        """Convert an AIService ORM instance to a list item schema."""
+        needs_api_key = (
+            not service.api_key
+            or service.api_key == PLACEHOLDER_API_KEY
+        )
+        return AIServiceListItemSchema(
+            service_id=service.service_id,
+            name=service.name,
+            provider=service.provider.value if hasattr(service.provider, 'value') else service.provider,
+            model_name=service.description or "",  # description stores model name
+            supports_video=service.supports_video or False,
+            created_at=service.create_date,
+            needs_api_key=needs_api_key,
+            is_system=is_system,
+        )
+
+    @staticmethod
+    def get_ai_services_by_app_id(db: Session, app_id: int) -> List[AIServiceListItemSchema]:
+        """Get all AI services for a specific app, including platform-level system services."""
+        app_services = AIServiceRepository.get_by_app_id(db, app_id)
+        system_services = AIServiceRepository.get_system_services(db)
+
+        result = [AIServiceService._to_list_item(svc, is_system=False) for svc in app_services]
+        result += [AIServiceService._to_list_item(svc, is_system=True) for svc in system_services]
+        return result
+    
+    @staticmethod
+    def get_ai_service_detail(db: Session, app_id: int, service_id: int) -> AIServiceDetailSchema:
+        """Get detailed information about a specific AI service"""
+        if service_id == 0:
+            # New AI service
+            # Get available providers for the form
+            providers = [{"value": p.value, "name": p.value} for p in ProviderEnum]
+            
+            return AIServiceDetailSchema(
+                service_id=0,
+                name="",
+                provider=None,
+                model_name="",
+                api_key="",
+                base_url="",
+                supports_video=False,
+                created_at=None,
+                # Form data
+                available_providers=providers
+            )
+        
+        # Existing AI service
+        service = AIServiceRepository.get_by_id_and_app_id(db, service_id, app_id)
+        
+        if not service:
+            return None
+        
+        # Get available providers for the form
+        providers = [{"value": p.value, "name": p.value} for p in ProviderEnum]
+        
+        needs_api_key = (
+            not service.api_key
+            or service.api_key == PLACEHOLDER_API_KEY
+        )
+        return AIServiceDetailSchema(
+            service_id=service.service_id,
+            name=service.name,
+            provider=service.provider.value if hasattr(service.provider, 'value') else service.provider,
+            model_name=service.description or "",
+            api_key=mask_api_key(service.api_key),
+            base_url=service.endpoint or "",  # Use endpoint as base_url
+            supports_video=service.supports_video or False,
+            created_at=service.create_date,
+            available_providers=providers,
+            needs_api_key=needs_api_key,
+        )
+    
+    @staticmethod
+    def create_or_update_ai_service(db: Session, app_id: int, service_id: int, service_data: CreateUpdateAIServiceSchema) -> AIServiceDetailSchema:
+        """Create a new AI service or update an existing one"""
+        if service_id == 0:
+            # Enforce Free tier restriction (SaaS mode only — Free users cannot create own AI Services)
+            from models.app import App as _App
+            from services.tier_enforcement_service import TierEnforcementService
+            _app = db.query(_App).filter(_App.app_id == app_id).first()
+            if _app:
+                TierEnforcementService.check_ai_service_allowed(db, _app.owner_id)
+
+            # Create new AI service
+            service = AIService()
+            service.app_id = app_id
+            service.create_date = datetime.now()
+        else:
+            # Update existing AI service
+            service = AIServiceRepository.get_by_id_and_app_id(db, service_id, app_id)
+            
+            if not service:
+                return None
+        
+        # Update service data
+        service.name = service_data.name
+        service.provider = service_data.provider  # Store as string, not enum
+        service.description = service_data.model_name  # Store model name in description
+        # Only update api_key if user provided a new (non-masked) value
+        if not is_masked_key(service_data.api_key):
+            service.api_key = service_data.api_key
+        service.endpoint = service_data.base_url  # Store base_url in endpoint
+        service.supports_video = service_data.supports_video
+        
+        # Create or update the service
+        if service_id == 0:
+            service = AIServiceRepository.create(db, service)
+        else:
+            service = AIServiceRepository.update(db, service)
+        
+        # Return updated service detail
+        return AIServiceService.get_ai_service_detail(db, app_id, service.service_id)
+    
+    @staticmethod
+    def copy_ai_service(db: Session, app_id: int, service_id: int) -> AIServiceDetailSchema:
+        """Copy an existing AI service"""
+        service = AIServiceRepository.get_by_id_and_app_id(db, service_id, app_id)
+        
+        if not service:
+            return None
+
+        existing = {s.name for s in AIServiceService.get_ai_services_by_app_id(db, app_id)}
+        base_name = service.name.strip() if service.name else "AI Service"
+        new_name = f"{base_name} Copy"
+        counter = 2
+        while new_name in existing:
+            new_name = f"{base_name} Copy {counter}"
+            counter += 1
+
+        # Create a new service with the same data
+        new_service = AIService(
+            app_id=app_id,
+            name=new_name,
+            provider=service.provider,
+            description=service.description,
+            api_key=service.api_key,
+            endpoint=service.endpoint,
+            supports_video=service.supports_video or False,
+            create_date=datetime.now()
+        )
+        
+        new_service = AIServiceRepository.create(db, new_service)
+        
+        return AIServiceService.get_ai_service_detail(db, app_id, new_service.service_id)
+
+    @staticmethod
+    def delete_ai_service(db: Session, app_id: int, service_id: int) -> bool:
+        """Delete an AI service"""
+        service = AIServiceRepository.get_by_id_and_app_id(db, service_id, app_id)
+        
+        if not service:
+            return False
+        
+        AIServiceRepository.delete(db, service)
+        
+        return True
+
+    @staticmethod
+    def test_connection_with_config(config: dict) -> dict:
+        """Test connection to AI service using provided configuration"""
+        try:
+            # Create a mock object that mimics AIService model
+            class MockAIService:
+                def __init__(self, data):
+                    self.provider = data.get('provider')
+                    self.description = data.get('description') # Model name
+                    self.api_key = data.get('api_key')
+                    self.endpoint = data.get('endpoint')
+                    self.api_version = data.get('api_version')
+            
+            service = MockAIService(config)
+            
+            # Guard: placeholder, missing, or masked API key
+            if (
+                not service.api_key
+                or service.api_key == PLACEHOLDER_API_KEY
+                or is_masked_key(service.api_key)
+            ):
+                return {
+                    "status": "error",
+                    "message": (
+                        "API key is required. Please configure "
+                        "a valid API key before testing the "
+                        "connection."
+                    ),
+                }
+
+            # Validate required fields
+            if not service.provider:
+                return {
+                    "status": "error",
+                    "message": "Provider is required"
+                }
+            if not service.description:
+                return {
+                    "status": "error",
+                    "message": "Model name is required"
+                }
+            
+            # Special handling for Whisper (transcription model)
+            if service.description and 'whisper' in service.description.lower():
+                return AIServiceService._test_whisper_connection(service)
+            
+            # Build LLM using shared tool
+            llm = create_llm_from_service(service, temperature=0)
+            
+            # Test invocation with timeout
+            try:
+                # Add timeout to prevent hanging connections
+                config_with_timeout = RunnableConfig(timeout=30)
+                response = llm.invoke("Hello", config=config_with_timeout)
+            except (TimeoutError, FuturesTimeoutError, asyncio.TimeoutError):
+                return {
+                    "status": "error",
+                    "message": "Connection timeout: The AI service did not respond within 30 seconds"
+                }
+            
+            return {
+                "status": "success",
+                "message": "Successfully connected to AI service.",
+                "response": str(response.content) if hasattr(response, 'content') else str(response)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error testing AI service connection: {str(e)}")
+            return {
+                "status": "error",
+                "message": str(e)
+            }
+    
+    @staticmethod
+    def _test_whisper_connection(service) -> dict:
+        """Test connection to OpenAI Whisper API"""
+        try:
+            from openai import OpenAI
+            
+            if not service.api_key or service.api_key == PLACEHOLDER_API_KEY:
+                return {
+                    "status": "error",
+                    "message": (
+                        "API key is required. Please configure "
+                        "a valid API key before testing the "
+                        "connection."
+                    ),
+                }
+            
+            # Initialize OpenAI client. The api_key is already normalized by
+            # CreateUpdateAIServiceSchema on every create/update, so we trust
+            # what we read from the DB.
+            client = OpenAI(api_key=service.api_key)
+            
+            logger.info("Testing Whisper connection using configured API key")
+            
+            # Test by listing models (lightweight API call)
+            models = client.models.list()
+            
+            # Check if whisper-1 model is accessible
+            model_names = [m.id for m in models.data]
+            
+            if 'whisper-1' in model_names:
+                return {
+                    "status": "success",
+                    "message": "Successfully connected to OpenAI Whisper API",
+                    "response": "Whisper-1 model is available"
+                }
+            else:
+                return {
+                    "status": "success",
+                    "message": "Connected to OpenAI API, but whisper-1 model not found in available models",
+                    "response": f"Available models: {', '.join(model_names[:5])}..."
+                }
+                
+        except Exception as e:
+            logger.error(f"Error testing Whisper connection: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"Failed to connect to OpenAI Whisper API: {str(e)}"
+            }
+
+    @staticmethod
+    def test_connection(db: Session, app_id: int, service_id: int) -> dict:
+        """Test connection to AI service"""
+        service = AIServiceRepository.get_by_id_and_app_id(db, service_id, app_id)
+        if not service:
+            return {"status": "error", "message": "AI service not found"}
+            
+        # Convert model to dict for the shared method
+        config = {
+            "provider": service.provider,
+            "description": service.description,
+            "api_key": service.api_key,
+            "endpoint": service.endpoint
+        }
+        
+        return AIServiceService.test_connection_with_config(config)
+    @staticmethod
+    def delete_by_app_id(app_id: int):
+        """Delete all AI services for a specific app"""
+        from db.database import SessionLocal
+        session = SessionLocal()
+        try:
+            AIServiceRepository.delete_by_app_id(session, app_id)
+        finally:
+            session.close() 
