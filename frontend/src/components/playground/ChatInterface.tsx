@@ -293,6 +293,8 @@ function ChatInterface({
 
       await refreshFileList(result.conversationId || currentConversationId);
       onMessageSent?.();
+
+      textareaRef.current?.focus();
     } catch (error) {
       setHoldStreamingContent(false);
       const errorMsg: Message = {
@@ -615,7 +617,7 @@ function ChatInterface({
                         key={message.id}
                         className="flex justify-end animate-slide-in-right"
                       >
-                        <div className="max-w-[85%] lg:max-w-[75%]">
+                        <div className="max-w-[85%] lg:max-w-[75%] min-w-0">
                           <div className="pg-bubble-user">
                             <MessageContent
                               content={message.content}
@@ -667,7 +669,7 @@ function ChatInterface({
                         key={message.id}
                         className="flex justify-start animate-slide-in-left"
                       >
-                        <div className="max-w-[85%] lg:max-w-[75%]">
+                        <div className="max-w-[85%] lg:max-w-[75%] min-w-0">
                           <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700/40 text-red-700 dark:text-red-300 rounded-2xl rounded-bl-sm px-4 py-3">
                             <div className="flex items-center gap-2 mb-1">
                               <svg
@@ -710,7 +712,7 @@ function ChatInterface({
                       key={message.id}
                       className={`flex justify-start ${wasStreamed ? '' : 'animate-slide-in-left'}`}
                     >
-                      <div className="max-w-[90%] lg:max-w-[80%]">
+                      <div className="max-w-[90%] lg:max-w-[80%] min-w-0">
                         <div className="pg-bubble-agent text-gray-800 dark:text-gray-100">
                           <MessageContent
                             content={message.content}
@@ -794,7 +796,7 @@ function ChatInterface({
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isStreaming}
-                  className="p-1.5 rounded-lg text-gray-400 dark:text-gray-500
+                  className="p-2 rounded-xl text-gray-400 dark:text-gray-500
                              hover:text-indigo-600 dark:hover:text-indigo-400
                              hover:bg-indigo-50 dark:hover:bg-indigo-900/20
                              disabled:opacity-40 disabled:cursor-not-allowed
@@ -826,14 +828,14 @@ function ChatInterface({
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
-                placeholder={`Message ${agentName}...`}
+                placeholder={`Message ${agentName}…`}
                 disabled={isStreaming}
-                className="flex-1 bg-transparent border-none outline-none resize-none
+                className="flex-1 py-2 bg-transparent border-none outline-none resize-none
                           text-sm text-gray-800 dark:text-gray-100
                           placeholder:text-gray-400 dark:placeholder:text-gray-500
                           disabled:opacity-50
                           focus:outline-none focus:ring-0
-                          max-h-40"
+                          max-h-40 input-login"
                 rows={1}
                 style={{ minHeight: '1.5rem' }}
               />
@@ -863,7 +865,7 @@ function ChatInterface({
                   type="button"
                   onClick={handleSendMessage}
                   disabled={!canSend}
-                  className="pg-btn-send shrink-0 !p-2"
+                  className="pg-btn-send shrink-0 !p-2 rounded-xl"
                   aria-label="Send message"
                 >
                   <svg
