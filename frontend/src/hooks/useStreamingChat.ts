@@ -10,6 +10,7 @@ interface StreamResult {
 
 export interface StreamFnOptions {
   readonly files?: File[];
+  readonly fileReferences?: string[];
   readonly searchParams?: any;
   readonly conversationId?: number | null;
   readonly onEvent: (event: StreamEvent) => void;
@@ -20,6 +21,7 @@ export type StreamFn = (message: string, options: StreamFnOptions) => Promise<vo
 
 interface SendOptions {
   readonly files?: File[];
+  readonly fileReferences?: string[];
   readonly conversationId?: number | null;
   readonly searchParams?: any;
 }
@@ -113,6 +115,7 @@ export function useStreamingChat(streamFn: StreamFn): UseStreamingChatReturn {
       try {
         await streamFnRef.current(message, {
           files: options?.files,
+          fileReferences: options?.fileReferences,
           searchParams: options?.searchParams,
           conversationId: options?.conversationId,
           signal: abortController.signal,
